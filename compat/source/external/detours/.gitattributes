@@ -1,0 +1,2 @@
+# Preserve the verified dependency snapshot byte-for-byte, including line endings.
+* -text
