@@ -2,6 +2,7 @@
 #include "VoiceRandomizer.h"
 #include "detours.h"
 #include <bcrypt.h>
+#include <xaudio2.h>
 #include <tlhelp32.h>
 #include <algorithm>
 #include <cerrno>
@@ -26,10 +27,15 @@ using Cache = int32_t (__fastcall*)(void*, const char*);
 // Original 51D570 ends with xor eax,eax / ret. Preserve its return value.
 using Frame = uint32_t (__fastcall*)(void*, uint8_t);
 using CacheKey = void (__fastcall*)(char*, const char*);
+// Native sampler creation, validated at RVA 586AE0. All stack arguments are
+// preserved; channel controls are applied before the newly created voice starts.
+using Sampler = bool (__fastcall*)(void*, uint32_t, const char*, uint32_t,
+    uint32_t, uint32_t, const void*, uint32_t, const WAVEFORMATEX*, const XAUDIO2_BUFFER*);
 Play originalPlay = nullptr;
 Cache originalCache = nullptr;
 Frame originalFrame = nullptr;
 CacheKey originalCacheKey = nullptr;
+Sampler originalSampler = nullptr;
 struct State {
     explicit State(uint64_t seed) : rules(seed) {}
     std::wstring root, ini;
@@ -91,11 +97,22 @@ void RefreshConfiguration() {
     config.targetOld = !_wcsicmp(Setting(L"Randomizer", L"GuaranteeTarget", L"new").c_str(), L"old");
     config.guarantee = Integer(L"Randomizer", L"GuaranteeEnabled", 1, 0, 1) != 0;
     config.radiance = Integer(L"Randomizer", L"CapturingRadianceEnabled", 1, 0, 1) != 0;
+    config.softPity = Integer(L"Randomizer", L"SoftPityEnabled", 0, 0, 1) != 0;
+    config.softPityStart = Integer(L"Randomizer", L"SoftPityStart", 10, 1, 1000);
+    config.softPityStep = Integer(L"Randomizer", L"SoftPityStep", 5, 0, 100);
+    config.stereo = Integer(L"Stereo", L"Enabled", 0, 0, 1) != 0;
+    config.stereoSwap = Integer(L"Stereo", L"SwapChannels", 0, 0, 1) != 0;
+    config.stereoLeft = Integer(L"Stereo", L"LeftVolume", 100, 0, 100);
+    config.stereoRight = Integer(L"Stereo", L"RightVolume", 100, 0, 100);
     config.overlay.enabled = Integer(L"Overlay", L"Enabled", 1, 0, 1) != 0;
     config.overlay.left = static_cast<float>(Integer(L"Overlay", L"LeftPercent", 2, 0, 90)) / 100.f;
     config.overlay.center = static_cast<float>(Integer(L"Overlay", L"CenterYPercent", 40, 0, 100)) / 100.f;
     config.overlay.height = static_cast<float>(Integer(L"Overlay", L"HeightPercent", 50, 10, 100)) / 100.f;
     config.overlay.scrollMs = static_cast<float>(Integer(L"Overlay", L"ScrollMs", 180, 0, 2000));
+    config.overlay.maxEntries = Integer(L"Overlay", L"MaxEntries", 10, 1, static_cast<int>(kMaxHistory));
+    config.overlay.transparency = static_cast<float>(Integer(L"Overlay", L"TransparencyPercent", 0, 0, 100)) / 100.f;
+    config.overlay.waiScale = static_cast<float>(Integer(L"Overlay", L"WaiScalePercent", 100, 0, 200)) / 100.f;
+    config.overlay.hideOnOtherVoice = Integer(L"Overlay", L"HideOnOtherVoice", 0, 0, 1) != 0;
     {
         std::lock_guard<std::mutex> lock(state->configMutex);
         state->rules.Configure(config);
@@ -185,6 +202,7 @@ struct Prepared {
     Decision decision;
     const Resource* resource = nullptr;
     bool eligible = false;
+    bool stereoRequested = false, stereo = false, swap = false;
 };
 bool Prepare(const Request* input, Prepared& play) {
     char name[MAX_PATH]{};
@@ -197,7 +215,12 @@ bool Prepare(const Request* input, Prepared& play) {
     std::lock_guard<std::mutex> lock(state->configMutex);
     if (state->config.enabled && resource != state->resources.end()) {
         play.resource = &resource->second;
-        play.decision = state->rules.Choose(play.name, state->config);
+        play.stereoRequested = state->config.stereo;
+        play.swap = state->config.stereoSwap;
+        if (play.stereoRequested) {
+            play.stereo = FileExists(play.resource->stereoPath[play.swap ? 1 : 0]);
+            play.decision.reason = 7;
+        } else play.decision = state->rules.Choose(play.name, state->config);
         play.eligible = true;
     }
     return true;
@@ -211,25 +234,31 @@ uint32_t __fastcall PlayHook(void* self, const Request* input) {
     uint32_t handle;
     if (!play.eligible) handle = originalPlay(self, input);
     else {
-        if (play.decision.selectedOld) {
+        if (play.stereo) {
+            play.request.name = play.resource->stereoAlias[play.swap ? 1 : 0].c_str();
+        } else if (play.stereoRequested) {
+            Log("STEREO_FALLBACK name=%s stereo_asset_missing; using game voice", play.name.c_str());
+        } else if (play.decision.selectedOld) {
             if (FileExists(play.resource->path)) {
                 play.request.name = play.resource->alias.c_str();
                 actualOld = true;
             } else Log("FALLBACK event=%llu name=%s old_file_missing", play.decision.event, play.name.c_str());
         }
         handle = originalPlay(self, &play.request);
-        if (actualOld && handle == UINT32_MAX) {
+        if ((actualOld || play.stereo) && handle == UINT32_MAX) {
             Log("FALLBACK event=%llu name=%s old_queue_rejected", play.decision.event, play.name.c_str());
             handle = originalPlay(self, input);
             actualOld = false;
+            play.stereo = false;
         }
         const auto& d = play.decision;
-        Log("PLAY event=%llu id=%u name=%s selectedOld=%d actualOld=%d reason=%u roll=%d count=%u->%u pending=%d->%d targetOld=%d guarantee=%d radiance=%d epoch=%llu handle=%u",
+        Log("PLAY event=%llu id=%u name=%s selectedOld=%d actualOld=%d reason=%u roll=%d count=%u->%u pending=%d->%d targetOld=%d guarantee=%d radiance=%d epoch=%llu handle=%u soft=%u->%u targetPercent=%d stereo=%d swap=%d",
             d.event, play.id, play.name.c_str(), d.selectedOld, actualOld, d.reason, d.roll,
             d.countBefore, d.countAfter, d.pendingBefore, d.pendingAfter, d.targetOld, d.guarantee,
-            d.radiance, d.epoch, handle);
+            d.radiance, d.epoch, handle, d.softBefore, d.softAfter, d.targetPercent, play.stereo, play.swap);
     }
-    try { AppendHistory(play.ticket, play.id, play.name, actualOld, play.decision.reason, handle, play.decision.targetOld); }
+    if (handle != UINT32_MAX) NotifyVoicePlayed(play.ticket != 0);
+    try { AppendHistory(play.ticket, play.id, play.name, actualOld, play.decision.reason, handle, play.decision.targetOld, play.stereo, play.swap); }
     catch (...) { Log("HISTORY allocation failed; voice selection unaffected"); }
     return handle;
 }
@@ -272,11 +301,17 @@ bool ModuleCacheKey(const char* input, char (&key)[64]) {
     }
     constexpr std::string_view oldPrefix = "voice_randomizer/assets/old/";
     constexpr std::string_view testPrefix = "voice_randomizer/assets/placeholder/";
+    constexpr std::string_view stereoLeftPrefix = "voice_randomizer/assets/stereo_lr/";
+    constexpr std::string_view stereoRightPrefix = "voice_randomizer/assets/stereo_rl/";
     std::string_view keyPrefix;
     if (name.substr(0,oldPrefix.size()) == oldPrefix) {
         name.remove_prefix(oldPrefix.size()); keyPrefix = "vr_old_";
     } else if (name.substr(0,testPrefix.size()) == testPrefix) {
         name.remove_prefix(testPrefix.size()); keyPrefix = "vr_test_";
+    } else if (name.substr(0,stereoLeftPrefix.size()) == stereoLeftPrefix) {
+        name.remove_prefix(stereoLeftPrefix.size()); keyPrefix = "vr_stlr_";
+    } else if (name.substr(0,stereoRightPrefix.size()) == stereoRightPrefix) {
+        name.remove_prefix(stereoRightPrefix.size()); keyPrefix = "vr_strl_";
     } else return false;
     // Exact startup-valid table membership rejects other namespaces, nested
     // paths, extension variants and the three UI-only rows.
@@ -297,6 +332,60 @@ void __fastcall CacheKeyHook(char* output, const char* input) {
     // The game helper synchronously copies into output64; no retained pointer.
     // All reviewed callers consume output, never RAX (559B20 is void).
     originalCacheKey(output,matched ? key : input);
+}
+bool StereoResourceName(const char* input) {
+    char buffer[MAX_PATH]{};
+    if (!SafeName(buffer, input)) return false;
+    for (char& character : buffer) {
+        if (character == '\\') character = '/';
+        else if (character >= 'A' && character <= 'Z') character += 'a'-'A';
+    }
+    std::string_view name(buffer);
+    constexpr std::string_view fullPrefix = "voice/wav/";
+    if (name.substr(0,fullPrefix.size()) == fullPrefix) name.remove_prefix(fullPrefix.size());
+    if (name.size()>4 && name.substr(name.size()-4)==".wav") name.remove_suffix(4);
+    constexpr std::string_view prefixes[] = {"voice_randomizer/assets/stereo_lr/",
+        "voice_randomizer/assets/stereo_rl/", "vr_stlr_", "vr_strl_"};
+    for (const auto prefix : prefixes) {
+        if (name.substr(0,prefix.size()) == prefix)
+            return state->resources.find(std::string(name.substr(prefix.size()))) != state->resources.end();
+    }
+    return false;
+}
+bool __fastcall SamplerHook(void* self, uint32_t slot, const char* name, uint32_t a4,
+    uint32_t a5, uint32_t a6, const void* a7, uint32_t flags,
+    const WAVEFORMATEX* format, const XAUDIO2_BUFFER* buffer) {
+    bool stereo = false;
+    float volumes[2]{1.f,1.f};
+    try {
+        WORD channels=0;
+        stereo = format && SafeCopy(&channels,reinterpret_cast<const uint8_t*>(format)+2,sizeof(channels))
+            && channels==2 && StereoResourceName(name);
+        if (stereo) {
+            std::lock_guard<std::mutex> lock(state->configMutex);
+            volumes[0]=static_cast<float>(state->config.stereoLeft)/100.f;
+            volumes[1]=static_cast<float>(state->config.stereoRight)/100.f;
+        }
+    } catch (...) { stereo=false; }
+    // The high byte selects the engine's mono/panned submix. For our explicit
+    // two-channel resources use its direct stereo route; retain all other flags.
+    const bool success=originalSampler(self,slot,name,a4,a5,a6,a7,
+        stereo ? flags & 0x00ffffffu : flags,format,buffer);
+    if (success && stereo) {
+        IXAudio2SourceVoice** voices=nullptr;
+        uint32_t count=0;
+        IXAudio2SourceVoice* source=nullptr;
+        const auto bytes=static_cast<const uint8_t*>(self);
+        if (SafeCopy(&voices,bytes+0xE8,sizeof(voices)) && voices
+            && SafeCopy(&count,bytes+0xF0,sizeof(count)) && slot<count
+            && SafeCopy(&source,voices+slot,sizeof(source)) && source) {
+            const HRESULT result=source->SetChannelVolumes(2,volumes,XAUDIO2_COMMIT_NOW);
+            Log("STEREO_ROUTE slot=%u left=%g right=%g flags=%08x hresult=%08lx",
+                slot,static_cast<double>(volumes[0]),static_cast<double>(volumes[1]),flags,
+                static_cast<unsigned long>(result));
+        } else Log("STEREO_ROUTE slot=%u native_source_unavailable",slot);
+    }
+    return success;
 }
 uint32_t __fastcall FrameHook(void* self, uint8_t flag) {
     IDXGISwapChain* chain = nullptr;
@@ -342,6 +431,7 @@ DWORD AttachHooks() {
     if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalCache), CacheHook);
     if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalFrame), FrameHook);
     if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalCacheKey), CacheKeyHook);
+    if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalSampler), SamplerHook);
     if (error) DetourTransactionAbort();
     else error = DetourTransactionCommit();
     return static_cast<DWORD>(error);
@@ -358,9 +448,11 @@ DWORD Initialize() {
     static constexpr uint8_t cacheBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x57,0x48,0x81,0xec,0x80,0x00,0x00,0x00};
     static constexpr uint8_t frameBytes[] = {0x40,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x48,0x8b,0x89,0xd8,0x02,0x00,0x00};
     static constexpr uint8_t keyBytes[] = {0x48,0x85,0xc9,0x0f,0x84,0x1a,0x01,0x00,0x00,0x48,0x89,0x5c,0x24,0x18,0x55};
+    static constexpr uint8_t samplerBytes[] = {0x55,0x53,0x56,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x8D,0x6C,0x24,0xF9};
     if (memcmp(base + 0x4A1BF0, playBytes, sizeof(playBytes)) || memcmp(base + 0x57D1C0, cacheBytes, sizeof(cacheBytes))
         || memcmp(base + 0x51D570, frameBytes, sizeof(frameBytes))
-        || memcmp(base + 0x559B20, keyBytes, sizeof(keyBytes))) return ERROR_REVISION_MISMATCH;
+        || memcmp(base + 0x559B20, keyBytes, sizeof(keyBytes))
+        || memcmp(base + 0x586AE0,samplerBytes,sizeof(samplerBytes))) return ERROR_REVISION_MISMATCH;
     uint64_t seed = GetCurrentProcessId() ^ GetTickCount64();
     (void)BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&seed), sizeof(seed), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     std::unique_ptr<State> created(new State(seed));
@@ -380,7 +472,14 @@ DWORD Initialize() {
         if (index >= 824) continue;
         const std::string name(item.name);
         const std::wstring path = folder + std::wstring(name.begin(), name.end()) + L".wav";
-        if (AnsiPath(path) && ValidWave(path)) state->resources.emplace(name, Resource{item.id, relative + name, path});
+        if (AnsiPath(path) && ValidWave(path)) {
+            const std::wstring wideName(name.begin(),name.end());
+            Resource resource{item.id,relative+name,path,
+                {"voice_randomizer/assets/stereo_lr/"+name,"voice_randomizer/assets/stereo_rl/"+name},
+                {state->root+L"\\assets\\stereo_lr\\"+wideName+L".wav",
+                 state->root+L"\\assets\\stereo_rl\\"+wideName+L".wav"}};
+            state->resources.emplace(name,std::move(resource));
+        }
         else Log("RESOURCE excluded id=%u name=%s", item.id, item.name);
     }
     RefreshConfiguration();
@@ -388,6 +487,7 @@ DWORD Initialize() {
     originalCache = reinterpret_cast<Cache>(base + 0x57D1C0);
     originalFrame = reinterpret_cast<Frame>(base + 0x51D570);
     originalCacheKey = reinterpret_cast<CacheKey>(base + 0x559B20);
+    originalSampler = reinterpret_cast<Sampler>(base + 0x586AE0);
     HMODULE pinned = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                            reinterpret_cast<LPCWSTR>(&Initialize), &pinned)) return GetLastError();
@@ -396,7 +496,7 @@ DWORD Initialize() {
     const HANDLE worker = CreateThread(nullptr, 0, ConfigurationWorker, nullptr, 0, nullptr);
     if (worker) CloseHandle(worker);
     else Log("CONFIG worker failed error=%lu; initial configuration retained", GetLastError());
-    Log("INIT ready resources=%zu ui=827 set=%s alias_namespace=voice_randomizer/assets hooks=4 cache_key=559B20 no_open_hook=1 runtime_validation=pending",
+    Log("INIT ready resources=%zu ui=827 set=%s alias_namespace=voice_randomizer/assets hooks=5 cache_key=559B20 stereo_sampler=586AE0 no_open_hook=1 runtime_validation=pending",
         state->resources.size(), placeholder ? "placeholder" : "legacy");
     return ERROR_SUCCESS;
 }

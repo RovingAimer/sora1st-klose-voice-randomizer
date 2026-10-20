@@ -20,7 +20,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = ROOT.parent
 EXPECTED_GAME_SHA256 = "9585d3d993874d65156aba633c00b8a25faab3afde8953a8a183c80fb8f657ac"
-ARCHIVE_STEM = "VoiceRandomizer-fork-candidate"
+ARCHIVE_STEM = "VoiceRandomizer-options-candidate"
 CHUNK_SIZE = 1024 * 1024
 
 
@@ -318,6 +318,22 @@ def main():
 
     source_commit = validate_committed_source()
     native_report, native_report_path, pe_path, dll_path = validate_native_build()
+    editor = native_report.get("editor")
+    if not editor or editor.get("executed") is not False:
+        raise RuntimeError("Build the current settings editor with --editor before packaging")
+    editor_path = ROOT / "source/build/KloseVoiceSettings.exe"
+    editor_record = file_record(editor_path)
+    if editor_record != {"bytes": editor.get("bytes"), "sha256": editor.get("sha256")}:
+        raise RuntimeError("Editor report and binary disagree")
+    for key, expected in editor.get("inputs", {}).items():
+        path = REPOSITORY.joinpath(*safe_relative_path(key).parts)
+        if not path.is_file() or sha256_file(path) != expected:
+            raise RuntimeError("Editor source input changed: " + key)
+        if git_output("diff", native_report["source_git"]["commit"], "HEAD", "--", key):
+            raise RuntimeError("Editor input differs from its build source commit: " + key)
+    template_path = ROOT / "source/build/editor_template.ini"
+    if sha256_file(template_path) != editor.get("embedded_template_sha256"):
+        raise RuntimeError("Generated default INI differs from embedded editor template")
     input_manifest = read_json(ROOT / "analysis" / "input_manifest.json")
     tree_manifest = read_json(ROOT / "analysis" / "original_tree_manifest.json")
     voice_index = read_json(ROOT / "analysis" / "voice-index.json")
@@ -346,13 +362,18 @@ def main():
         "mods/VoiceRandomizer/VoiceRandomizer.dll": dll_record,
         "mods/VoiceRandomizer/sora_mod.ini": module_ini_record,
     }
+    overrides = {
+        "voice_randomizer/克萝赛MOD设置.exe": editor_path,
+        "voice_randomizer/voice_randomizer.ini": template_path,
+    }
     for key, value in asset_records.items():
-        expected_install["voice/wav/" + key] = value
+        expected_install["voice/wav/" + key] = file_record(overrides[key]) if key in overrides else value
 
     install_files = [(dll_path, "mods/VoiceRandomizer/VoiceRandomizer.dll"),
                      (ini_path, "mods/VoiceRandomizer/sora_mod.ini")]
-    install_files.extend(((assets_archive, "voice/wav/" + key) if assets_archive else
-                          original.joinpath(*safe_relative_path(key).parts), "voice/wav/" + key)
+    install_files.extend((overrides[key] if key in overrides else
+                          ((assets_archive, "voice/wav/" + key) if assets_archive else
+                           original.joinpath(*safe_relative_path(key).parts)), "voice/wav/" + key)
                          for key in sorted(asset_records))
     with tempfile.NamedTemporaryFile(prefix=install_name + ".", suffix=".tmp", dir=output, delete=False) as handle:
         install_tmp = Path(handle.name)
@@ -364,7 +385,7 @@ def main():
         install_tmp.unlink(missing_ok=True)
 
     update_path = output / (ARCHIVE_STEM + "-module-update.zip")
-    update_files = install_files[:2]
+    update_files = install_files[:2] + [(editor_path, "voice/wav/voice_randomizer/克萝赛MOD设置.exe")]
     zip_from_files(update_path, update_files)
     update_members = verify_zip(update_path, {member: expected_install[member] for _, member in update_files})
 
@@ -395,6 +416,7 @@ def main():
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "game_sha256_required": EXPECTED_GAME_SHA256,
         "package_source_commit": source_commit,
+        "settings_editor": editor,
         "native_module": {
             "source_commit": native_report["source_git"]["commit"],
             "build_report_workspace_dirty": native_report["source_git"]["dirty"],
@@ -414,10 +436,11 @@ def main():
             "assets_archive": ({"name": assets_archive.name, **file_record(assets_archive)} if assets_archive else None),
             "full_original_file_count": len(original_records),
             "full_original_bytes": sum(record["bytes"] for record in original_records.values()),
-            "copied_file_count": len(asset_records),
-            "copied_bytes": sum(record["bytes"] for record in asset_records.values()),
+            "copied_file_count": len(asset_records)-len(overrides),
+            "copied_bytes": sum(record["bytes"] for key,record in asset_records.items() if key not in overrides),
+            "replaced_files": {key: file_record(value) for key,value in overrides.items()},
             "copied_files": [
-                {"path": key, **value} for key, value in sorted(asset_records.items())
+                {"path": key, **value} for key, value in sorted(asset_records.items()) if key not in overrides
             ],
             "source_notice": {"path": "compat/source/third_party/original-notice.txt", **notice_record},
             "root_legacy_xinput_and_readme_copied": False,

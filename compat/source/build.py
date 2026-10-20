@@ -37,7 +37,7 @@ def notice_resource(notice):
     return result
 
 
-def extract_notice(dll, name):
+def extract_notice(dll, name, resource_type=10, language=0):
     """Read a named RCDATA resource directly from PE bytes, without loading it."""
     pe = struct.unpack_from('<I', dll, 0x3c)[0]
     optional = pe + 24
@@ -69,8 +69,8 @@ def extract_notice(dll, name):
         if not target & 0x80000000:
             raise ValueError('Expected a resource directory')
         return target & 0x7fffffff
-    languages = dict(entries(directory(directory(0, 10), name)))
-    data_entry = languages[0]  # Generated resources use neutral language.
+    languages = dict(entries(directory(directory(0, resource_type), name)))
+    data_entry = languages[language] if language is not None else next(iter(languages.values()))
     if data_entry & 0x80000000:
         raise ValueError('Expected a resource data entry')
     rva, size = struct.unpack_from('<II', dll, base + data_entry)
@@ -144,6 +144,7 @@ def source_git_info():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sdk-root', type=Path)
+    parser.add_argument('--editor', action='store_true', help='Also compile the settings editor; never run it or upstream tests')
     args = parser.parse_args()
     OUTPUT.mkdir(exist_ok=True)
     (OUTPUT/'report.json').unlink(missing_ok=True)
@@ -217,6 +218,74 @@ def main():
         build_flags=common,exports=exports,dependencies=dependencies,embedded_notices=embedded_notices,
         generated_inputs={'notices.res': hashlib.sha256(resource.read_bytes()).hexdigest()},
         dll_executed=False,game_runtime_verified=False,game_directory_written=False)
+    if args.editor:
+        fork = ROOT.parent.parent
+        author = fork/'voice_randomizer'
+        editor_inputs = [author/'src'/name for name in
+            ('config_editor.cpp', 'editor_config.h', 'config_editor.rc', 'config_editor.manifest')]
+        template = author/'release/config_template.ini'
+        editor_inputs += [template, ROOT/'build.py']
+        if not all(path.is_file() for path in editor_inputs):
+            raise RuntimeError('--editor requires the full fork layout with voice_randomizer sources')
+        # SDK headers/libraries may be relocated while native tools remain installed.
+        kits = Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'))/'Windows Kits/10/bin'
+        sdk_version = environment.get('WindowsSDKVersion', '').strip('\\/')
+        candidates = [kits/sdk_version/'x64', *sorted(kits.glob('10.*/x64'), reverse=True)]
+        native = next((path for path in candidates if (path/'rc.exe').is_file() and (path/'mt.exe').is_file()), None)
+        rc = str(native/'rc.exe') if native else shutil.which('rc.exe', path=environment['PATH'])
+        mt = str(native/'mt.exe') if native else shutil.which('mt.exe', path=environment['PATH'])
+        if not rc or not mt:
+            raise RuntimeError('--editor requires existing Windows SDK rc.exe and mt.exe')
+        environment['PATH'] = str(Path(mt).parent) + os.pathsep + environment['PATH']
+        text = template.read_text(encoding='utf-8-sig').replace('\r\n', '\n').rstrip()+'\n'
+        template_bytes = b'\xff\xfe'+text.replace('\n', '\r\n').encode('utf-16le')
+        generated_template = OUTPUT/'editor_template.ini'
+        generated_template.write_bytes(template_bytes)
+        generated_rc = OUTPUT/'config_editor.rc'
+        resource_text = (author/'src/config_editor.rc').read_text(encoding='utf-8-sig')
+        resource_text, replacements = re.subn(r'^101 RCDATA .*$',
+            lambda match: '101 RCDATA "'+generated_template.as_posix()+'"', resource_text, count=1, flags=re.MULTILINE)
+        if replacements != 1:
+            raise RuntimeError('Editor RCDATA template declaration not found')
+        generated_rc.write_text(resource_text, encoding='utf-8')
+        editor_res = OUTPUT/'config_editor.res'
+        run([rc, '/nologo', '/fo', editor_res, generated_rc], 'editor_resource.log')
+        editor_artifact = OUTPUT/'KloseVoiceSettings.exe'
+        run([compiler, '/nologo', '/std:c++17', '/EHsc', '/O2', '/MT', '/W4', '/utf-8',
+             '/DUNICODE', '/D_UNICODE', '/Brepro', '/Fo'+str(OUTPUT/'config_editor.obj'),
+             author/'src/config_editor.cpp', editor_res, '/link', '/SUBSYSTEM:WINDOWS',
+             '/INCREMENTAL:NO', '/MANIFEST:EMBED', '/MANIFESTINPUT:'+str(author/'src/config_editor.manifest'),
+             '/OUT:'+str(editor_artifact)], 'editor_compile.log')
+        run([dumper, '/NOLOGO', '/HEADERS', '/IMPORTS', '/DEPENDENTS', editor_artifact], 'editor_pe_inspection.txt')
+        run([mt, '-nologo', '-inputresource:'+str(editor_artifact)+';#1',
+             '-out:'+str(OUTPUT/'editor_embedded.manifest')], 'editor_manifest.log')
+        # Resource extraction reads PE bytes only; no executable is loaded.
+        editor_bytes = editor_artifact.read_bytes()
+        embedded_template = extract_notice(editor_bytes, 101, language=None)
+        if embedded_template != template_bytes:
+            raise RuntimeError('Editor embedded configuration differs from the generated template')
+        version = extract_notice(editor_bytes, 1, resource_type=16, language=None)
+        if '1.2.0'.encode('utf-16le') not in version:
+            raise RuntimeError('Editor VERSIONINFO was not preserved')
+        pe = struct.unpack_from('<I', editor_bytes, 0x3c)[0]
+        if struct.unpack_from('<H', editor_bytes, pe+4)[0] != 0x8664 or struct.unpack_from('<H', editor_bytes, pe+24+68)[0] != 2:
+            raise RuntimeError('Editor must be an AMD64 Windows GUI executable')
+        manifest = (OUTPUT/'editor_embedded.manifest').read_text(encoding='utf-8-sig')
+        if not all(value in manifest for value in ('asInvoker', 'PerMonitorV2', 'Microsoft.Windows.Common-Controls')):
+            raise RuntimeError('Editor manifest is missing required settings')
+        report['editor'] = dict(artifact=str(editor_artifact), sha256=hashlib.sha256(editor_bytes).hexdigest(),
+            bytes=len(editor_bytes), compiler=compiler, compiler_version=banner.stderr.strip(),
+            sdk_version=environment.get('WindowsSDKVersion'), sdk_root=str(args.sdk_root),
+            resource_compiler=rc, manifest_tool=mt,
+            machine='AMD64', subsystem='Windows GUI',
+            dependencies=sorted(set(re.findall(r'^\s+([A-Za-z0-9_.-]+\.dll)\s*$',
+                (OUTPUT/'editor_pe_inspection.txt').read_text(encoding='utf-8'), re.MULTILINE|re.IGNORECASE))),
+            version_resource_sha256=hashlib.sha256(version).hexdigest(),
+            inputs={path.relative_to(fork).as_posix():hashlib.sha256(path.read_bytes()).hexdigest() for path in editor_inputs},
+            embedded_template_sha256=hashlib.sha256(embedded_template).hexdigest(),
+            generated_inputs={path.name:hashlib.sha256(path.read_bytes()).hexdigest()
+                              for path in (generated_template, generated_rc, editor_res)},
+            executed=False, upstream_tests_run=False)
     (OUTPUT/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({key:report[key] for key in ('artifact','dll_sha256','dll_bytes','exports','dependencies')}))
 if __name__=='__main__':

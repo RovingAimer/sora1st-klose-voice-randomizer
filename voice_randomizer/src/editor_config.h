@@ -14,7 +14,8 @@
 
 namespace editor {
 enum Field { Enabled, Mode, OldPercent, Target, Guarantee, Radiance, AssetSet, LogCache,
-             OverlayEnabled, Left, Center, Height, Scroll, FieldCount };
+             OverlayEnabled, Left, Center, Height, Scroll, SoftPity, SoftStart, SoftStep,
+             MaxEntries, Transparency, WaiScale, HideOther, Stereo, Swap, LeftVolume, RightVolume, FieldCount };
 struct Spec { const wchar_t* section; const wchar_t* key; const wchar_t* initial; int low; int high; const wchar_t* choices; };
 inline constexpr std::array<Spec,FieldCount> specs{{
     {L"Randomizer",L"Enabled",L"1",0,1,nullptr},
@@ -30,6 +31,17 @@ inline constexpr std::array<Spec,FieldCount> specs{{
     {L"Overlay",L"CenterYPercent",L"40",0,100,nullptr},
     {L"Overlay",L"HeightPercent",L"50",10,100,nullptr},
     {L"Overlay",L"ScrollMs",L"180",0,2000,nullptr},
+    {L"Randomizer",L"SoftPityEnabled",L"0",0,1,nullptr},
+    {L"Randomizer",L"SoftPityStart",L"10",1,1000,nullptr},
+    {L"Randomizer",L"SoftPityStep",L"5",0,100,nullptr},
+    {L"Overlay",L"MaxEntries",L"10",1,50,nullptr},
+    {L"Overlay",L"TransparencyPercent",L"0",0,100,nullptr},
+    {L"Overlay",L"WaiScalePercent",L"100",0,200,nullptr},
+    {L"Overlay",L"HideOnOtherVoice",L"0",0,1,nullptr},
+    {L"Stereo",L"Enabled",L"0",0,1,nullptr},
+    {L"Stereo",L"SwapChannels",L"0",0,1,nullptr},
+    {L"Stereo",L"LeftVolume",L"100",0,100,nullptr},
+    {L"Stereo",L"RightVolume",L"100",0,100,nullptr},
 }};
 using Values=std::array<std::wstring,FieldCount>;
 inline Values defaults() { Values v; for(size_t i=0;i<v.size();++i) v[i]=specs[i].initial; return v; }

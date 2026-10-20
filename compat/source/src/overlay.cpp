@@ -14,6 +14,7 @@ using Microsoft::WRL::ComPtr;
 std::mutex configMutex, historyMutex, gpuMutex;
 OverlayConfig configuration;
 std::vector<HistoryEntry> history;
+std::atomic<bool> latestVoiceKlose{true};
 std::wstring uiRoot;
 struct Animation { uint64_t key; float row; double born; };
 struct Vertex { float x, y, u, v, alpha; };
@@ -103,7 +104,7 @@ void CreateRenderer(ID3D11Device* device) {
         {"TEXCOORD",1,DXGI_FORMAT_R32_FLOAT,0,16,D3D11_INPUT_PER_VERTEX_DATA,0}};
     Check(device->CreateInputLayout(elements, 3, vs->GetBufferPointer(), vs->GetBufferSize(), &renderer.layout));
     D3D11_BUFFER_DESC buffer{};
-    buffer.ByteWidth = 2400; buffer.Usage = D3D11_USAGE_DYNAMIC;
+    buffer.ByteWidth = static_cast<UINT>(kMaxHistory * 12 * sizeof(Vertex)); buffer.Usage = D3D11_USAGE_DYNAMIC;
     buffer.BindFlags = D3D11_BIND_VERTEX_BUFFER; buffer.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     Check(device->CreateBuffer(&buffer, nullptr, &renderer.buffer));
     D3D11_SAMPLER_DESC sampler{};
@@ -191,7 +192,7 @@ struct Pipeline {
     Pipeline& operator=(const Pipeline&) = delete;
 };
 HRESULT Render(ID3D11Texture2D* backbuffer, const std::vector<HistoryEntry>& entries, const OverlayConfig& cfg, double now) {
-    if (entries.size() > 10) return E_INVALIDARG;
+    if (entries.size() > kMaxHistory) return E_INVALIDARG;
     D3D11_TEXTURE2D_DESC description{}; backbuffer->GetDesc(&description);
     if (!description.Width || !description.Height) return S_FALSE;
     ComPtr<ID3D11Device> device; backbuffer->GetDevice(&device);
@@ -201,8 +202,9 @@ HRESULT Render(ID3D11Texture2D* backbuffer, const std::vector<HistoryEntry>& ent
     Check(device->CreateRenderTargetView(backbuffer,nullptr,&target));
     const float width = static_cast<float>(description.Width), height = static_cast<float>(description.Height);
     const float regionHeight = height * cfg.height;
-    const float top = std::clamp(height * cfg.center - regionHeight * .5f,0.f,height-regionHeight);
-    const float bottom = top + regionHeight, rowHeight = regionHeight / 10.f;
+    const float baseTop = std::clamp(height * cfg.center - regionHeight * .5f,0.f,height-regionHeight);
+    const float bottom = baseTop + regionHeight, rowHeight = regionHeight / 10.f;
+    const float clipTop = std::clamp(std::min(baseTop,bottom-static_cast<float>(entries.size())*rowHeight),0.f,height);
     const float side = rowHeight * .86f, gap = rowHeight * .13f;
     const float x = std::clamp(width * cfg.left,0.f,std::max(0.f,width-2.f*rowHeight));
     const double duration = std::max(static_cast<double>(cfg.scrollMs)/1000.,.001);
@@ -210,11 +212,13 @@ HRESULT Render(ID3D11Texture2D* backbuffer, const std::vector<HistoryEntry>& ent
     const float factor = static_cast<float>(1.-std::exp(-5.*dt/duration));
     renderer.last = now;
     std::vector<Animation> animations; animations.reserve(entries.size());
-    std::array<Vertex,120> vertices{};
-    std::vector<Draw> draws; draws.reserve(20);
+    std::array<Vertex,kMaxHistory * 12> vertices{};
+    std::vector<Draw> draws; draws.reserve(entries.size() * 2);
     UINT vertexCount = 0;
     const auto image = [&](float left, float y, float alpha, size_t index) {
-        const float l=2*left/width-1, r=2*(left+side)/width-1, t=1-2*y/height, b=1-2*(y+side)/height;
+        const float imageSide = side * (index == 3 ? cfg.waiScale : 1.f);
+        if (imageSide <= 0.f) return;
+        const float l=2*left/width-1, r=2*(left+imageSide)/width-1, t=1-2*y/height, b=1-2*(y+imageSide)/height;
         draws.push_back({vertexCount,index});
         const Vertex quad[]={{l,t,0,0,alpha},{r,t,1,0,alpha},{r,b,1,1,alpha},{l,t,0,0,alpha},{r,b,1,1,alpha},{l,b,0,1,alpha}};
         memcpy(vertices.data()+vertexCount,quad,sizeof(quad)); vertexCount+=6;
@@ -230,10 +234,16 @@ HRESULT Render(ID3D11Texture2D* backbuffer, const std::vector<HistoryEntry>& ent
             if(found!=renderer.animations.end()) animation.row+=(row-animation.row)*factor;
             alpha=static_cast<float>(std::clamp((now-animation.born)/duration,0.,1.));
         }
+        alpha *= 1.f - cfg.transparency;
         animations.push_back(animation);
         const float y=bottom-(animation.row+.5f)*rowHeight-.5f*side;
-        image(x,y,alpha,entry.old?1u:0u);
-        if(entry.badge)image(x+side+gap,y,alpha,entry.badge==1?2u:3u);
+        if (entry.stereo) {
+            image(x,y,alpha,entry.swap?1u:0u);
+            image(x+side+gap,y,alpha,entry.swap?0u:1u);
+        } else {
+            image(x,y,alpha,entry.old?1u:0u);
+            if(entry.badge)image(x+side+gap,y,alpha,entry.badge==1?2u:3u);
+        }
     }
     renderer.animations=std::move(animations);
     D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -251,14 +261,14 @@ HRESULT Render(ID3D11Texture2D* backbuffer, const std::vector<HistoryEntry>& ent
     const FLOAT factors[4]{}; context->OMSetBlendState(renderer.blend.Get(),factors,UINT32_MAX);
     context->OMSetDepthStencilState(renderer.depth.Get(),0); context->RSSetState(renderer.raster.Get());
     const D3D11_VIEWPORT viewport{0,0,width,height,0,1}; context->RSSetViewports(1,&viewport);
-    const D3D11_RECT scissor{0,static_cast<LONG>(top),static_cast<LONG>(description.Width),static_cast<LONG>(bottom)};
+    const D3D11_RECT scissor{0,static_cast<LONG>(clipTop),static_cast<LONG>(description.Width),static_cast<LONG>(bottom)};
     context->RSSetScissorRects(1,&scissor);
     ID3D11SamplerState* sampler=renderer.sampler.Get(); context->PSSetSamplers(0,1,&sampler);
     for(const auto& draw:draws) {
         ID3D11ShaderResourceView* resource=renderer.images[draw.image].Get();
         context->PSSetShaderResources(0,1,&resource); context->Draw(6,draw.first);
     }
-    if(!readyLogged) { Log("UI_READY width=%u height=%u images=4 history=10 newest=bottom",description.Width,description.Height); readyLogged=true; }
+    if(!readyLogged) { Log("UI_READY width=%u height=%u images=4 history=%d newest=bottom",description.Width,description.Height,cfg.maxEntries); readyLogged=true; }
     return S_OK;
 }
 }
@@ -270,24 +280,33 @@ void ConfigureOverlay(const OverlayConfig& config) {
     configuration.center=std::clamp(config.center,0.f,1.f);
     configuration.height=std::clamp(config.height,.1f,1.f);
     configuration.scrollMs=std::clamp(config.scrollMs,0.f,2000.f);
+    configuration.maxEntries=std::clamp(config.maxEntries,1,static_cast<int>(kMaxHistory));
+    configuration.transparency=std::clamp(config.transparency,0.f,1.f);
+    configuration.waiScale=std::clamp(config.waiScale,0.f,2.f);
 }
-void AppendHistory(uint64_t ticket,uint32_t id,const std::string& name,bool old,uint32_t reason,uint32_t handle,bool targetOld) {
+void AppendHistory(uint64_t ticket,uint32_t id,const std::string& name,bool old,uint32_t reason,uint32_t handle,bool targetOld,bool stereo,bool swap) {
     if(!ticket || handle==UINT32_MAX)return;
     const int badge=reason==3?1:(reason==static_cast<uint32_t>(!targetOld)?2:0);
     std::lock_guard<std::mutex> lock(historyMutex);
     const auto position=std::lower_bound(history.begin(),history.end(),ticket,[](const HistoryEntry& entry,uint64_t key){return entry.key<key;});
     if(position!=history.end() && position->key==ticket)return;
-    history.insert(position,HistoryEntry{ticket,id,name,old,badge});
-    if(history.size()>10)history.erase(history.begin());
+    history.insert(position,HistoryEntry{ticket,id,name,old,badge,stereo,swap});
+    if(history.size()>kMaxHistory)history.erase(history.begin());
 }
+void NotifyVoicePlayed(bool klose) noexcept { latestVoiceKlose.store(klose,std::memory_order_relaxed); }
 void DrawHistory(IDXGISwapChain* chain) noexcept {
     if(!chain)return;
     try {
         OverlayConfig cfg;
         {std::lock_guard<std::mutex> lock(configMutex);cfg=configuration;}
-        if(!cfg.enabled)return;
+        if(!cfg.enabled || cfg.transparency>=1.f
+            || (cfg.hideOnOtherVoice && !latestVoiceKlose.load(std::memory_order_relaxed)))return;
         std::vector<HistoryEntry> entries;
-        {std::lock_guard<std::mutex> lock(historyMutex);entries=history;}
+        {
+            std::lock_guard<std::mutex> lock(historyMutex);
+            const size_t count=std::min(history.size(),static_cast<size_t>(cfg.maxEntries));
+            entries.assign(history.end()-count,history.end());
+        }
         if(entries.empty())return;
         const double now=Seconds();
         std::lock_guard<std::mutex> lock(gpuMutex);

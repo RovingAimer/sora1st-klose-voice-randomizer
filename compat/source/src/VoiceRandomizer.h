@@ -17,16 +17,24 @@
 #include <vector>
 
 namespace voice {
+constexpr size_t kMaxHistory = 50;
 enum class Mode { Random, Alternate, New, Old };
 struct OverlayConfig {
     bool enabled = true;
     float left = .02f, center = .40f, height = .50f, scrollMs = 180.f;
+    int maxEntries = 10;
+    float transparency = 0.f, waiScale = 1.f;
+    bool hideOnOtherVoice = false;
 };
 struct Config {
     bool enabled = true, logCache = false, targetOld = false;
     bool guarantee = true, radiance = true;
     Mode mode = Mode::Random;
     int oldPercent = 50;
+    bool softPity = false;
+    int softPityStart = 10, softPityStep = 5;
+    bool stereo = false, stereoSwap = false;
+    int stereoLeft = 100, stereoRight = 100;
     OverlayConfig overlay;
 };
 struct Decision {
@@ -36,6 +44,8 @@ struct Decision {
     int roll = -1;
     bool pendingBefore = false, pendingAfter = false, targetOld = false;
     bool guarantee = true, radiance = true;
+    uint32_t softBefore = 0, softAfter = 0;
+    int targetPercent = 0;
 };
 class Rules {
 public:
@@ -49,22 +59,34 @@ private:
     uint64_t sequence_ = 0, epoch_ = 0;
     uint32_t count_ = 0;
     bool pending_ = false, target_ = false, guarantee_ = true, radiance_ = true;
+    uint32_t softCount_ = 0;
+    bool softEnabled_ = false;
+    int softStart_ = 10, softStep_ = 5;
 };
 struct IndexEntry { const char* name; uint32_t id; };
 extern const IndexEntry kIndex[827];
-struct Resource { uint32_t id; std::string alias; std::wstring path; };
+struct Resource {
+    uint32_t id;
+    std::string alias;
+    std::wstring path;
+    std::array<std::string, 2> stereoAlias;
+    std::array<std::wstring, 2> stereoPath;
+};
 struct HistoryEntry {
     uint64_t key;
     uint32_t id;
     std::string name;
     bool old;
     int badge;
+    bool stereo = false, swap = false;
 };
 void Log(const char* format, ...) noexcept;
 void SetLogPath(const std::wstring& root);
 void ConfigureOverlay(const OverlayConfig& config);
 void InitializeOverlay(const std::wstring& root);
 void AppendHistory(uint64_t ticket, uint32_t id, const std::string& name,
-                   bool old, uint32_t reason, uint32_t handle, bool targetOld);
+                   bool old, uint32_t reason, uint32_t handle, bool targetOld,
+                   bool stereo = false, bool swap = false);
+void NotifyVoicePlayed(bool klose) noexcept;
 void DrawHistory(IDXGISwapChain* chain) noexcept;
 }

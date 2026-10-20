@@ -1,5 +1,6 @@
 // Reconstructed third-party behavior; provenance and license boundary: VoiceRandomizer.h.
 #include "VoiceRandomizer.h"
+#include <algorithm>
 #include <intrin.h>
 
 namespace voice {
@@ -14,7 +15,14 @@ void Rules::Configure(const Config& config) {
         radiance_ = config.radiance;
         count_ = 0;
         pending_ = false;
+        softCount_ = 0;
         ++epoch_;
+    }
+    if (softEnabled_ != config.softPity || softStart_ != config.softPityStart || softStep_ != config.softPityStep) {
+        softEnabled_ = config.softPity;
+        softStart_ = config.softPityStart;
+        softStep_ = config.softPityStep;
+        softCount_ = 0;
     }
 }
 Decision Rules::Choose(const std::string& name, const Config& config) {
@@ -27,6 +35,13 @@ Decision Rules::Choose(const std::string& name, const Config& config) {
     result.targetOld = target_;
     result.guarantee = guarantee_;
     result.radiance = radiance_;
+    result.softBefore = softCount_;
+    const int baseTarget = target_ ? config.oldPercent : 100 - config.oldPercent;
+    uint64_t targetPercent = static_cast<uint64_t>(baseTarget);
+    if (softEnabled_ && softCount_ >= static_cast<uint32_t>(softStart_)) {
+        targetPercent += (static_cast<uint64_t>(softCount_) - softStart_ + 1) * softStep_;
+    }
+    result.targetPercent = static_cast<int>(std::min(targetPercent, uint64_t{100}));
     if (config.mode != Mode::Random) {
         if (config.mode == Mode::Alternate) {
             result.selectedOld = (++alternate_[name] % 2) == 0;
@@ -49,7 +64,8 @@ Decision Rules::Choose(const std::string& name, const Config& config) {
             result.selectedOld = target_;
             result.reason = 3;
         } else {
-            result.selectedOld = result.roll < config.oldPercent;
+            const int oldPercent = target_ ? result.targetPercent : 100 - result.targetPercent;
+            result.selectedOld = result.roll < oldPercent;
             result.reason = result.selectedOld ? 1u : 0u;
             if (radiance_) {
                 if (result.selectedOld == target_) { if (count_) --count_; }
@@ -58,8 +74,13 @@ Decision Rules::Choose(const std::string& name, const Config& config) {
             pending_ = guarantee_ && result.selectedOld != target_;
         }
     }
+    if (config.mode == Mode::Random) {
+        if (result.selectedOld == target_) softCount_ = 0;
+        else if (softCount_ < UINT32_MAX) ++softCount_;
+    }
     result.countAfter = count_;
     result.pendingAfter = pending_;
+    result.softAfter = softCount_;
     return result;
 }
 }

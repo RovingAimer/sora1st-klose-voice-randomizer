@@ -77,12 +77,19 @@ struct App {
         if(building)return;
         view=collect();dirty=view!=document.values || !document.exists || document.normalised;
         EnableWindow(GetDlgItem(window,SaveId),dirty);
-        const bool random=view[Mode]==L"random";
-        for(auto id:{OldPercent,Target,Guarantee,Radiance})EnableWindow(fields[id],random);
+        const bool stereo=view[Stereo]==L"1", random=view[Mode]==L"random" && !stereo;
+        EnableWindow(fields[Mode],!stereo);
+        for(auto id:{OldPercent,Target,Guarantee,Radiance,SoftPity})EnableWindow(fields[id],random);
         EnableWindow(GetDlgItem(window,200+OldPercent),random);
-        if(!random)SetWindowTextW(rule_text,tr(L"当前模式暂停保底和捕获明光。\r\n切回随机模式后继续；下方开关与目标设置仍会保留。",L"This mode pauses Guarantee and Capturing Radiance.\r\nTheir settings are retained until you return to random mode."));
-        else if(view[Target]==L"old")SetWindowTextW(rule_text,tr(L"目标：旧版。随机抽到新版显示【歪】。\r\n启用时，保底与捕获明光均播放旧版。基础旧版概率仍由上方数值决定。",L"Target: legacy. A random new voice receives the Wai badge.\r\nEnabled guarantees and radiance both choose legacy. The base OLD chance stays as set above."));
-        else SetWindowTextW(rule_text,tr(L"目标：新版。随机抽到旧版显示【歪】。\r\n启用时，保底与捕获明光均播放新版。基础旧版概率仍由上方数值决定。",L"Target: new. A random legacy voice receives the Wai badge.\r\nEnabled guarantees and radiance both choose new. The base OLD chance stays as set above."));
+        for(auto id:{SoftStart,SoftStep}) {
+            EnableWindow(fields[id],random && view[SoftPity]==L"1");
+            EnableWindow(GetDlgItem(window,200+id),random && view[SoftPity]==L"1");
+        }
+        for(auto id:{Swap,LeftVolume,RightVolume})EnableWindow(fields[id],stereo);
+        for(auto id:{LeftVolume,RightVolume})EnableWindow(GetDlgItem(window,200+id),stereo);
+        if(stereo)SetWindowTextW(rule_text,tr(L"双声道优先：默认左新版、右旧版；左右互换后反转。\r\n随机、交替与所有保底计数暂停。",L"Stereo takes priority: left new, right legacy; Swap reverses them.\r\nRandom, alternation and all pity counters pause."));
+        else if(!random)SetWindowTextW(rule_text,tr(L"当前模式暂停所有保底计数；交替从新版开始。\r\n缺少旧资源的语音使用游戏配音。",L"This mode pauses all pity counters. Alternation starts with new.\r\nLines without legacy resources use game audio."));
+        else SetWindowTextW(rule_text,tr(L"软保底：连续未中目标 X 次后，下次提升所设百分点；再未中继续加。\r\n命中目标（包括硬保底）清零；目标结果最高为 100%。",L"Soft pity: after X consecutive misses, add the set points per further draw.\r\nAny target hit (including Guarantee) resets it. Target chance caps at 100%."));
         if(document.normalised && view==document.values)set_status(L"部分原有值无效，界面已采用有效值；点击保存可更新配置。",L"Some existing values were invalid. Valid values are shown; click Save to apply them.");
         else if(dirty)set_status(L"有尚未保存的更改。",L"You have unsaved changes.");
         else set_status(L"配置已读取。保存后，多数设置约 1 秒在游戏中生效。",L"Settings loaded. Most changes take effect in-game about one second after saving.");
@@ -103,22 +110,33 @@ struct App {
         for(int i=0;i<3;++i){TCITEMW item{};item.mask=TCIF_TEXT;item.pszText=const_cast<wchar_t*>(names[i]);TabCtrl_InsertItem(tabs,i,&item);}TabCtrl_SetCurSel(tabs,page);
         add(L"STATIC",L"",SS_WHITERECT,46,-1,22,119,676,409);
         check(Enabled,L"启用语音替换",L"Enable voice replacement",0,40,128,610);
-        label(L"播放模式",L"Playback mode",0,40,176,165,25);
-        combo(Mode,{tr(L"随机选择",L"Random"),tr(L"始终新版",L"Always new"),tr(L"始终旧版",L"Always legacy"),tr(L"同一句新旧交替",L"Alternate per line")},0,230,169,440);
-        label(L"交替模式从新版开始；无旧资源的语音始终使用游戏配音。",L"Alternation starts with new audio. Lines without legacy resources use game audio.",0,40,211,630,38);
-        label(L"基础旧版概率 (%)",L"Base OLD chance (%)",0,40,262,186,25);number(OldPercent,0,230,253);
-        label(L"保底目标",L"Preferred voice",0,367,262,143,25);combo(Target,{tr(L"新版",L"New"),tr(L"旧版",L"Legacy")},0,518,253,152);
-        check(Guarantee,L"启用保底",L"Enable Guarantee",0,40,307,282);
-        check(Radiance,L"启用捕获明光",L"Enable Capturing Radiance",0,350,307,320);
-        rule_text=label(L"",L"",0,40,359,630,77);
-        label(L"修改目标或任一机制开关并保存，会清空保底与明光计数。\r\n两者都关闭时，按基础概率进行普通随机。",L"Saving a target or rule-switch change resets both rule states.\r\nWith both rules off, only the base random chance applies.",0,40,449,630,62);
+        label(L"播放模式",L"Playback mode",0,40,168,165,25);
+        combo(Mode,{tr(L"随机选择",L"Random"),tr(L"始终新版",L"Always new"),tr(L"始终旧版",L"Always legacy"),tr(L"同一句新旧交替",L"Alternate per line")},0,230,160,440);
+        label(L"基础旧版概率 (%)",L"Base OLD chance (%)",0,40,210,186,25);number(OldPercent,0,230,202);
+        label(L"保底目标",L"Preferred voice",0,367,210,143,25);combo(Target,{tr(L"新版",L"New"),tr(L"旧版",L"Legacy")},0,518,202,152);
+        check(Guarantee,L"启用硬保底",L"Enable Guarantee",0,40,240,282);
+        check(Radiance,L"启用捕获明光",L"Enable Capturing Radiance",0,350,240,320);
+        check(SoftPity,L"启用软保底",L"Enable soft pity",0,40,274,630);
+        label(L"连续未中次数 X",L"Consecutive misses X",0,40,312,186,25);number(SoftStart,0,230,304);
+        label(L"每次提升百分点",L"Added points per draw",0,350,312,194,25);number(SoftStep,0,554,304,116);
+        rule_text=label(L"",L"",0,40,344,630,49);
+        check(Stereo,L"启用双声道（左新、右旧）",L"Stereo (left new, right legacy)",0,40,397,330);
+        check(Swap,L"左右互换",L"Swap channels",0,390,397,280);
+        label(L"左声道音量 (%)",L"Left volume (%)",0,40,439,186,25);number(LeftVolume,0,230,431);
+        label(L"右声道音量 (%)",L"Right volume (%)",0,350,439,194,25);number(RightVolume,0,554,431,116);
+        label(L"目标/硬保底/明光变化清全部计数，软参数只清软计数。\r\n双声道需安装素材包；音量 0 静音、100 原音量。",L"Target/Guarantee/Radiance reset all; soft settings reset only soft pity.\r\nStereo needs its asset pack. Volume 0 mutes; 100 is unchanged.",0,40,478,630,43);
         check(OverlayEnabled,L"显示游戏内播放记录",L"Show in-game voice history",1,40,128,630);
-        label(L"左边距 (%)",L"Left margin (%)",1,40,182,170,25);number(Left,1,220,174);
-        label(L"垂直中心 (%)",L"Vertical center (%)",1,370,182,178,25);number(Center,1,554,174,116);
-        label(L"区域高度 (%)",L"Region height (%)",1,40,233,170,25);number(Height,1,220,225);
-        label(L"动画时长 (毫秒)",L"Animation (ms)",1,370,233,178,25);number(Scroll,1,554,225,116);
-        preview=add(L"STATIC",L"",SS_OWNERDRAW,40,1,40,285,330,204);
-        label(L"位置预览（示意）\r\n\r\n最多显示 10 条记录。\r\n最新记录从底部出现。\r\n高度同时决定头像大小。\r\n动画设为 0 可立即更新。",L"Position preview (schematic)\r\n\r\nUp to 10 recent entries.\r\nNewest entries appear below.\r\nHeight also scales avatars.\r\nUse 0 ms for instant updates.",1,394,296,276,191);
+        check(HideOther,L"下一条非克萝赛语音时隐藏，克萝赛语音时恢复",L"Hide on other voices; show again when Klose speaks",1,40,162,630);
+        label(L"左边距 (%)",L"Left margin (%)",1,40,210,170,25);number(Left,1,220,202);
+        label(L"垂直中心 (%)",L"Vertical center (%)",1,370,210,178,25);number(Center,1,554,202,116);
+        label(L"区域高度 (%)",L"Region height (%)",1,40,252,170,25);number(Height,1,220,244);
+        label(L"动画时长 (毫秒)",L"Animation (ms)",1,370,252,178,25);number(Scroll,1,554,244,116);
+        label(L"显示条数",L"Visible entries",1,40,294,170,25);number(MaxEntries,1,220,286);
+        label(L"常态透明度 (%)",L"Transparency (%)",1,370,294,178,25);number(Transparency,1,554,286,116);
+        label(L"歪图标缩放 (%)",L"Wai badge scale (%)",1,40,336,170,25);number(WaiScale,1,220,328);
+        label(L"透明度 100 = 完全隐藏",L"100% transparency = hidden",1,370,336,300,25);
+        preview=add(L"STATIC",L"",SS_OWNERDRAW,40,1,40,378,330,132);
+        label(L"位置预览（示意）\r\n最新记录从底部出现。\r\n条数只控制数量；区域高度决定大小。\r\n歪图标以自身左上角固定缩放；\r\n不影响头像和其他标识。\r\n缩放 0 隐藏歪图标。",L"Position preview (schematic)\r\nNewest entries appear below.\r\nCount controls quantity, not icon size.\r\nWai scales from its own top-left;\r\navatars and other badges stay fixed.\r\n0% scale hides Wai.",1,394,378,276,139);
         label(L"旧版分支素材",L"Legacy-branch audio",2,40,151,199,25);
         combo(AssetSet,{tr(L"正式旧版语音",L"Real legacy voices"),tr(L"测试占位音频（仅开发版）",L"Test placeholders (development only)")},2,250,141,420);
         label(L"正式发布包请选择旧版语音。\r\n切换素材需要重启游戏；测试音频仅在资源存在时可选用。",L"Use real legacy voices with the release package.\r\nSwitching sets requires a game restart. Test audio requires the separate development assets.",2,40,193,630,63);
@@ -145,7 +163,13 @@ struct App {
         view=collect();
         for(size_t i=0;i<specs.size();++i)if(!specs[i].choices) {
             int n=0;if(!integer(view[i],specs[i].low,specs[i].high,n)) {
-                page=i>=OverlayEnabled?1:(i==LogCache?2:0);TabCtrl_SetCurSel(tabs,page);show_page();
+                switch(static_cast<Field>(i)) {
+                case OverlayEnabled:case Left:case Center:case Height:case Scroll:
+                case MaxEntries:case Transparency:case WaiScale:case HideOther:page=1;break;
+                case AssetSet:case LogCache:page=2;break;
+                default:page=0;break;
+                }
+                TabCtrl_SetCurSel(tabs,page);show_page();
                 const auto range=std::to_wstring(specs[i].low)+L" – "+std::to_wstring(specs[i].high);
                 const auto message=std::wstring(tr(L"请输入范围内的整数：",L"Enter an integer in this range: "))+range;
                 MessageBoxW(window,message.c_str(),tr(L"数值无效",L"Invalid value"),MB_OK|MB_ICONWARNING);
@@ -160,9 +184,11 @@ struct App {
         try {
             const bool restart=view[AssetSet]!=document.values[AssetSet];
             const bool reset=view[Target]!=document.values[Target] || view[Guarantee]!=document.values[Guarantee] || view[Radiance]!=document.values[Radiance];
+            const bool soft_reset=view[SoftPity]!=document.values[SoftPity] || view[SoftStart]!=document.values[SoftStart] || view[SoftStep]!=document.values[SoftStep];
             document=editor::save(path,document,view);build();
             if(restart)set_status(L"已保存。素材切换需要重启游戏。",L"Saved. Restart the game to switch the audio set.");
-            else if(reset)set_status(L"已保存。约 1 秒生效，保底和明光计数将清零。",L"Saved. Applies in about one second; both rule states will reset.");
+            else if(reset)set_status(L"已保存。约 1 秒生效，随机机制计数将清零。",L"Saved. Applies in about one second; rule counters will reset.");
+            else if(soft_reset)set_status(L"已保存。约 1 秒生效，仅软保底计数清零。",L"Saved. Applies in about one second; only the soft-pity count resets.");
             else set_status(L"已保存。多数设置约 1 秒在游戏中生效。",L"Saved. Most settings apply in-game in about one second.");
             return true;
         }catch(const Error& e){error(e);return false;}
@@ -173,11 +199,30 @@ struct App {
     void draw_preview(DRAWITEMSTRUCT* d) {
         RECT rect=d->rcItem;FillRect(d->hDC,&rect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         SetDCBrushColor(d->hDC,RGB(236,242,249));FillRect(d->hDC,&rect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
-        int left=2,center=40,height=50;integer(view[Left],0,90,left,true);integer(view[Center],0,100,center,true);integer(view[Height],10,100,height,true);
-        const float w=static_cast<float>(rect.right),h=static_cast<float>(rect.bottom),span=h*height/100.f,pitch=span/10.f;
-        const float x=std::clamp(w*left/100.f,0.f,w-pitch*2),top=std::clamp(h*center/100.f-span*.5f,0.f,h-span);
-        SetDCBrushColor(d->hDC,view[OverlayEnabled]==L"1"?RGB(58,121,186):RGB(157,167,178));
-        for(int i=0;i<10;++i){RECT row{static_cast<LONG>(x),static_cast<LONG>(top+i*pitch),static_cast<LONG>(x+pitch*.86f),static_cast<LONG>(top+(i+.86f)*pitch)};FillRect(d->hDC,&row,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));}
+        int left=2,center=40,height=50,count=10,transparency=0,scale=100;
+        integer(view[Left],0,90,left,true);integer(view[Center],0,100,center,true);integer(view[Height],10,100,height,true);
+        integer(view[MaxEntries],1,50,count,true);integer(view[Transparency],0,100,transparency,true);integer(view[WaiScale],0,200,scale,true);
+        const float w=static_cast<float>(rect.right),h=static_cast<float>(rect.bottom),span=h*height/100.f,pitch=span/10.f,side=pitch*.86f;
+        const float x=std::clamp(w*left/100.f,0.f,std::max(0.f,w-pitch*2)),top=std::clamp(h*center/100.f-span*.5f,0.f,h-span);
+        const auto tint=[&](int r,int g,int b) {
+            return RGB((r*(100-transparency)+236*transparency)/100,(g*(100-transparency)+242*transparency)/100,(b*(100-transparency)+249*transparency)/100);
+        };
+        const int saved=SaveDC(d->hDC);
+        const float bottom=top+span;
+        IntersectClipRect(d->hDC,0,static_cast<int>(std::max(0.f,std::min(top,bottom-count*pitch))),rect.right,static_cast<int>(bottom));
+        for(int i=0;i<count;++i) {
+            const float y=bottom-(static_cast<float>(i)+.5f)*pitch-.5f*side;
+            SetDCBrushColor(d->hDC,view[OverlayEnabled]==L"1"?tint(58,121,186):tint(157,167,178));
+            RECT row{static_cast<LONG>(x),static_cast<LONG>(y),static_cast<LONG>(x+side),static_cast<LONG>(y+side)};
+            FillRect(d->hDC,&row,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+            if(i%3!=2) {
+                const float badge=side*(i%3==0?scale/100.f:1.f),badgeX=x+side+pitch*.13f;
+                SetDCBrushColor(d->hDC,view[OverlayEnabled]!=L"1"?tint(157,167,178):(i%3==0?tint(214,144,46):tint(151,92,174)));
+                RECT mark{static_cast<LONG>(badgeX),static_cast<LONG>(y),static_cast<LONG>(badgeX+badge),static_cast<LONG>(y+badge)};
+                FillRect(d->hDC,&mark,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+            }
+        }
+        RestoreDC(d->hDC,saved);
         SetBkMode(d->hDC,TRANSPARENT);SetTextColor(d->hDC,RGB(82,102,126));SelectObject(d->hDC,font);
         RECT caption=rect;caption.left+=px(70);caption.right-=px(10);
         DrawTextW(d->hDC,tr(L"游戏画面",L"Game view"),-1,&caption,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
