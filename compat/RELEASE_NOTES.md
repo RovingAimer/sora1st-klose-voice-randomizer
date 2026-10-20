@@ -4,8 +4,7 @@
 
 下载：
 
-- 已有兼容版：选择 `VoiceRandomizer-v0.1.0-update.zip` 更新包，保留个人配置。
-- 首次安装：选择 `VoiceRandomizer-v0.1.0-main.zip` 程序包，旧语音素材需自行准备。
+- 安装使用：选择 `VoiceRandomizer-v0.1.0-main.zip` 程序包，旧语音素材需自行准备。
 - 查看代码：选择 `VoiceRandomizer-v0.1.0-source.zip` 源码包。
 
-需先安装[通用加载器](https://github.com/RovingAimer/sora1looseload/releases/tag/v0.2.0)。退出游戏并备份后，按原目录解压到游戏根目录；[首次安装和回退说明](https://github.com/RovingAimer/sora1st-klose-voice-randomizer/blob/v0.1.0/compat/README.md)。
+需先安装[通用加载器](https://github.com/RovingAimer/sora1looseload/releases/tag/v0.2.0)。退出游戏并备份后，按原目录解压到游戏根目录；[首次安装和回退说明](https://github.com/RovingAimer/sora1st-klose-voice-randomizer/blob/compat/generic-loader/compat/README.md)。

@@ -16,13 +16,12 @@
 
 [下载 v0.1.0](https://github.com/RovingAimer/sora1st-klose-voice-randomizer/releases/tag/v0.1.0)。
 
-- `VoiceRandomizer-v0.1.0-update.zip`：已有兼容版时使用，保留个人配置。
 - `VoiceRandomizer-v0.1.0-main.zip`：首次安装程序包，含默认配置和界面图片。
 - `VoiceRandomizer-v0.1.0-source.zip`：完整源码，供查看和自行编译。
 
 退出游戏并备份现有语音模块、设置程序和配置，再将程序包按原目录解压到游戏根目录。不替换根目录加载器，其他 Mod 保持原样。
 
-程序包不含旧语音素材。首次安装时，将原 Mod 的 `assets/old/` 放入 `voice/wav/voice_randomizer/assets/old/`；已有兼容版可沿用当前素材。使用 `voice/wav/voice_randomizer/克萝赛MOD设置.exe` 修改设置。
+程序包不含旧语音素材。首次安装时，将原 Mod 的 `assets/old/` 放入 `voice/wav/voice_randomizer/assets/old/`。使用 `voice/wav/voice_randomizer/克萝赛MOD设置.exe` 修改设置。
 
 ## 配置与维护
 
