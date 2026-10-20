@@ -4,7 +4,7 @@
 
 ## 本地候选
 
-本轮候选目标目录为 compat/dist/20261020-native-options/，压缩包文件名沿用 VoiceRandomizer-options-candidate：
+本轮候选目标目录为 compat/dist/20261020-default-volume/，压缩包文件名沿用 VoiceRandomizer-options-candidate：
 
 - module-update.zip：3 个文件，模块 DLL、sora_mod.ini 和新编译的设置编辑器；保留用户的 voice_randomizer.ini。
 - install.zip：832 个文件，包括模块文件、新默认 INI、设置编辑器、原有 824 个 WAV 和 4 张 PNG。首次安装前备份个人 INI。
@@ -27,6 +27,7 @@ random 按基础概率抽取新旧语音，并可应用硬保底、捕获明光�
 | [Randomizer] SoftPityEnabled | 0 | 0 或 1；软保底开关。 |
 | [Randomizer] SoftPityStart | 10 | 1–1000；连续未中阈值 X。 |
 | [Randomizer] SoftPityStep | 5 | 0–100；每次增加的目标概率百分点。 |
+| [Randomizer] VolumePercent | 100 | 0–100；默认语音音量，0 静音、100 原音量；双声道开启时忽略。 |
 | [Overlay] MaxEntries | 10 | 1–50；控制显示条数，不改变头像大小或间距。 |
 | [Overlay] TransparencyPercent | 0 | 0–100；0 完全不透明，100 完全隐藏。 |
 | [Overlay] WaiScalePercent | 100 | 0–200；只缩放歪标识，锚定其左上角。 |
@@ -43,6 +44,8 @@ random 按基础概率抽取新旧语音，并可应用硬保底、捕获明光�
 配置键 HeightPercent 对应设置界面的“UI 区域高度 (%)”，用于控制 Overlay 区域大小；CenterYPercent 对应“垂直中心 (%)”，仍控制垂直位置。TransparencyPercent 的 0 表示完全不透明，100 表示完全隐藏。WaiScalePercent 只缩放歪标识并固定左上角。HideOnOtherVoice=1 时，成功播放 kind=2 的其他角色语音会隐藏 Overlay；之后播放克萝赛语音会恢复显示，历史记录不清空。
 
 ## 双声道
+
+“默认音量 (%)”用于语音替换启用、双声道关闭时的克萝赛语音，覆盖新版、旧版及随机/交替结果。开启双声道后该输入框与微调按钮置灰，播放只使用左右独立音量；关闭双声道后恢复之前保存的默认音量。缺少 VolumePercent 的旧 INI 使用 100%。保存后约 1 秒重读，对后续新建声源生效。
 
 双声道由同一个播放任务句柄中的两路原生单声道语音组成，分别来自游戏新版语音和现有旧版 WAV。内部双声道子混音将两路分别路由到左、右声道，并为每路设置独立音量；默认左边新版、右边旧版，SwapChannels 可交换两边。现有 824 个旧版 WAV 保持原样，不需要预合成双声道 WAV 包。
 

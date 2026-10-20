@@ -31,6 +31,7 @@ struct Config {
     bool guarantee = true, radiance = true;
     Mode mode = Mode::Random;
     int oldPercent = 50;
+    int volumePercent = 100;
     bool softPity = false;
     int softPityStart = 10, softPityStep = 5;
     bool stereo = false, stereoSwap = false;

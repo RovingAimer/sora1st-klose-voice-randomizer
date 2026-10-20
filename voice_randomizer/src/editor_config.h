@@ -15,7 +15,7 @@
 namespace editor {
 enum Field { Enabled, Mode, OldPercent, Target, Guarantee, Radiance, AssetSet, LogCache,
              OverlayEnabled, Left, Center, Height, Scroll, SoftPity, SoftStart, SoftStep,
-             MaxEntries, Transparency, WaiScale, HideOther, Stereo, Swap, LeftVolume, RightVolume, FieldCount };
+             MaxEntries, Transparency, WaiScale, HideOther, Stereo, Swap, LeftVolume, RightVolume, DefaultVolume, FieldCount };
 struct Spec { const wchar_t* section; const wchar_t* key; const wchar_t* initial; int low; int high; const wchar_t* choices; };
 inline constexpr std::array<Spec,FieldCount> specs{{
     {L"Randomizer",L"Enabled",L"1",0,1,nullptr},
@@ -42,6 +42,7 @@ inline constexpr std::array<Spec,FieldCount> specs{{
     {L"Stereo",L"SwapChannels",L"0",0,1,nullptr},
     {L"Stereo",L"LeftVolume",L"100",0,100,nullptr},
     {L"Stereo",L"RightVolume",L"100",0,100,nullptr},
+    {L"Randomizer",L"VolumePercent",L"100",0,100,nullptr},
 }};
 using Values=std::array<std::wstring,FieldCount>;
 inline Values defaults() { Values v; for(size_t i=0;i<v.size();++i) v[i]=specs[i].initial; return v; }

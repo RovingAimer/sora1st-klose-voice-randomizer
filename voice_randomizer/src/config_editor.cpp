@@ -79,6 +79,8 @@ struct App {
         EnableWindow(GetDlgItem(window,SaveId),dirty);
         const bool stereo=view[Stereo]==L"1", random=view[Mode]==L"random" && !stereo;
         EnableWindow(fields[Mode],!stereo);
+        EnableWindow(fields[DefaultVolume],!stereo);
+        EnableWindow(GetDlgItem(window,200+DefaultVolume),!stereo);
         for(auto id:{OldPercent,Target,Guarantee,Radiance,SoftPity})EnableWindow(fields[id],random);
         EnableWindow(GetDlgItem(window,200+OldPercent),random);
         for(auto id:{SoftStart,SoftStep}) {
@@ -109,7 +111,8 @@ struct App {
         const wchar_t* names[]{tr(L"语音与随机",L"Voices & Random"),tr(L"播放记录",L"History"),tr(L"高级",L"Advanced")};
         for(int i=0;i<3;++i){TCITEMW item{};item.mask=TCIF_TEXT;item.pszText=const_cast<wchar_t*>(names[i]);TabCtrl_InsertItem(tabs,i,&item);}TabCtrl_SetCurSel(tabs,page);
         add(L"STATIC",L"",SS_WHITERECT,46,-1,22,119,676,409);
-        check(Enabled,L"启用语音替换",L"Enable voice replacement",0,40,128,610);
+        check(Enabled,L"启用语音替换",L"Enable voice replacement",0,40,128,282);
+        label(L"默认音量 (%)",L"Default volume (%)",0,350,136,194,25);number(DefaultVolume,0,554,128,116);
         label(L"播放模式",L"Playback mode",0,40,168,165,25);
         combo(Mode,{tr(L"随机选择",L"Random"),tr(L"始终新版",L"Always new"),tr(L"始终旧版",L"Always legacy"),tr(L"同一句新旧交替",L"Alternate per line")},0,230,160,440);
         label(L"基础旧版概率 (%)",L"Base OLD chance (%)",0,40,210,186,25);number(OldPercent,0,230,202);

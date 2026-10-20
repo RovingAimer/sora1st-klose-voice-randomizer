@@ -18,4 +18,4 @@
 
 ## 验收状态
 
-本地候选目标目录为 compat/dist/20261020-native-options/，文件名沿用 VoiceRandomizer-options-candidate。模块更新包保留用户 INI；完整安装包含新默认 INI和完整旧资源。候选不是正式 release，且未有游戏内双声道验收结果。源码静态调用可核对双声道矩阵、独立音量和任务句柄处理，但不能证明设备与游戏场景的实际左右声道、双路时序或硬件路由。
+本地候选目标目录为 compat/dist/20261020-default-volume/，文件名沿用 VoiceRandomizer-options-candidate。新增默认音量 VolumePercent（默认 100%），在双声道关闭时生效；开启双声道后只使用左右音量。模块更新包保留用户 INI；完整安装包含新默认 INI和完整旧资源。候选不是正式 release，且未有游戏内双声道验收结果。源码静态调用可核对双声道矩阵、独立音量和任务句柄处理，但不能证明设备与游戏场景的实际左右声道、双路时序或硬件路由。

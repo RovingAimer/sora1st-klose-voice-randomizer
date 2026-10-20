@@ -23,7 +23,7 @@ build/report.json 的 editor 项记录设置 EXE 路径、SHA256、大小、编�
 
 ~~~powershell
 $originalPackage = Read-Host "Path to the original package directory"
-python source/tools/package_candidate.py --original $originalPackage --out dist/20261020-native-options
+python source/tools/package_candidate.py --original $originalPackage --out dist/20261020-default-volume
 ~~~
 
 若需要从此前兼容安装包读取未变更的旧资源，可传入 --assets-archive，并提供完整旧素材候选安装 ZIP。该选项只提供原有资源输入，不表示双声道素材包；824 个旧版 WAV 和 4 张 PNG 会按清单核对后复制到完整安装包。模块更新包只含 DLL、sora_mod.ini 和新版设置编辑器，不包含或覆盖用户 INI。完整安装包有 832 个文件，包含新默认 INI、编辑器、旧素材和模块文件。源码包包含完整 fork 源码和作者源码包中公开的 4 张 UI PNG，不包含 824 个旧版 WAV、程序二进制或游戏文件。

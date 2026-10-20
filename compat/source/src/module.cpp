@@ -52,6 +52,12 @@ struct StereoContext {
     IXAudio2SubmixVoice* destination = nullptr;
 };
 thread_local StereoContext* currentStereo = nullptr;
+thread_local float defaultVoiceGain = 1.f;
+struct DefaultVolumeScope {
+    float previous;
+    explicit DefaultVolumeScope(float gain) : previous(defaultVoiceGain) { defaultVoiceGain=gain; }
+    ~DefaultVolumeScope() { defaultVoiceGain=previous; }
+};
 struct StereoScope {
     StereoContext* previous;
     explicit StereoScope(StereoContext& context) : previous(currentStereo) { currentStereo=&context; }
@@ -115,6 +121,7 @@ void RefreshConfiguration() {
     config.enabled = Integer(L"Randomizer", L"Enabled", 1, 0, 1) != 0;
     config.logCache = Integer(L"Randomizer", L"LogCache", 0, 0, 1) != 0;
     config.oldPercent = Integer(L"Randomizer", L"OldPercent", 50, 0, 100);
+    config.volumePercent = Integer(L"Randomizer", L"VolumePercent", 100, 0, 100);
     config.targetOld = !_wcsicmp(Setting(L"Randomizer", L"GuaranteeTarget", L"new").c_str(), L"old");
     config.guarantee = Integer(L"Randomizer", L"GuaranteeEnabled", 1, 0, 1) != 0;
     config.radiance = Integer(L"Randomizer", L"CapturingRadianceEnabled", 1, 0, 1) != 0;
@@ -382,13 +389,30 @@ bool __fastcall SamplerHook(void* self,uint32_t slot,const char* name,uint32_t a
     const WAVEFORMATEX* format,const XAUDIO2_BUFFER* buffer) {
     StereoContext* context=currentStereo;
     WORD channels=0;
-    const bool split=context && format
-        && SafeCopy(&channels,reinterpret_cast<const uint8_t*>(format)+2,sizeof(channels)) && channels==1;
+    if (format) SafeCopy(&channels,reinterpret_cast<const uint8_t*>(format)+2,sizeof(channels));
+    const bool split=context && channels==1;
     if (split) context->attempted=true;
     // A private two-channel submix isolates our inner mono->stereo pan from the
     // engine's subsequent per-frame outer routing and volume updates.
     const bool success=originalSampler(self,slot,name,a4,a5,a6,a7,
         split ? ((flags&0x00ffffffu)|0x01000000u) : flags,format,buffer);
+    // Normal-mode channel gain leaves the engine's volume/fade/routing intact.
+    // Only an identified Klose task installs this TLS scope; stereo bypasses it.
+    if (success && !split && defaultVoiceGain!=1.f && channels>0 && channels<=XAUDIO2_MAX_AUDIO_CHANNELS) {
+        IXAudio2SourceVoice** sources=nullptr;
+        IXAudio2SourceVoice* source=nullptr;
+        uint32_t count=0;
+        const auto bytes=static_cast<const uint8_t*>(self);
+        if (SafeCopy(&sources,bytes+0xE8,sizeof(sources)) && sources
+            && SafeCopy(&count,bytes+0xF0,sizeof(count)) && slot<count
+            && SafeCopy(&source,sources+slot,sizeof(source)) && source) {
+            std::array<float,XAUDIO2_MAX_AUDIO_CHANNELS> gains;
+            std::fill_n(gains.begin(),channels,defaultVoiceGain);
+            const HRESULT result=source->SetChannelVolumes(channels,gains.data(),XAUDIO2_COMMIT_NOW);
+            Log("VOICE_VOLUME handle=%u slot=%u gain=%g result=%08lx",a4,slot,
+                static_cast<double>(defaultVoiceGain),static_cast<unsigned long>(result));
+        }
+    }
     if (!success || !split) return success;
     IXAudio2SourceVoice** sources=nullptr;
     IXAudio2SubmixVoice** sends=nullptr;
@@ -462,7 +486,16 @@ uint32_t __fastcall ProcessTaskHook(void* manager,const void* task) {
         const auto resource=state->resources.find(name);
         Config config;
         { std::lock_guard<std::mutex> lock(state->configMutex); config=state->config; }
-        if (!config.enabled || !config.stereo || resource==state->resources.end())
+        if (!config.enabled)
+            return originalProcessTask(manager,task);
+        if (!config.stereo) {
+            char key[64]{};
+            if (config.volumePercent==100 || (state->uiIndex.find(name)==state->uiIndex.end() && !ModuleCacheKey(name,key)))
+                return originalProcessTask(manager,task);
+            DefaultVolumeScope volume(static_cast<float>(config.volumePercent)/100.f);
+            return originalProcessTask(manager,task);
+        }
+        if (resource==state->resources.end())
             return originalProcessTask(manager,task);
         if (!PrecacheOldWave(manager,resource->second)) {
             Log("NATIVE_STEREO_FALLBACK name=%s old_cache_unavailable",name);
