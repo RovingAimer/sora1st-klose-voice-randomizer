@@ -23,6 +23,22 @@
 
 程序包不含旧语音素材。首次安装时，将原 Mod 的 `assets/old/` 放入 `voice/wav/voice_randomizer/assets/old/`。使用 `voice/wav/voice_randomizer/克萝赛MOD设置.exe` 修改设置。
 
+## 与原版的目录差异
+
+以下路径均相对于游戏根目录：
+
+| 内容 | 原版位置 | 本版位置 |
+| --- | --- | --- |
+| 语音模块 | `xinput1_4.dll` | `mods/VoiceRandomizer/VoiceRandomizer.dll`，同目录附 `sora_mod.ini` |
+| 旧语音 WAV | `voice_randomizer/assets/old/` | `voice/wav/voice_randomizer/assets/old/` |
+| 界面 PNG | `voice_randomizer/assets/ui/` | `voice/wav/voice_randomizer/assets/ui/` |
+| 个人配置 | `voice_randomizer/voice_randomizer.ini` | `voice/wav/voice_randomizer/voice_randomizer.ini` |
+| 设置程序 | `voice_randomizer/克萝赛MOD设置.exe` | `voice/wav/voice_randomizer/克萝赛MOD设置.exe` |
+
+根目录的 `xinput1_4.dll` 使用通用加载器提供的版本，语音模块放入 `mods/VoiceRandomizer/`。
+
+从原版迁移：先备份，再将旧语音 WAV 复制到新版的 `assets/old/`，保持原文件名；想保留设置，可将原 INI 复制到表中的新位置。界面图片和设置程序使用本安装包提供的新版。旧语音素材不包含在程序包内。
+
 ## 配置与维护
 
 设置保存后约一秒读取，对后续播放生效；切换素材需要重启游戏。旧配置缺少新增字段时使用默认值。默认音量为 100%，软保底默认关闭；音量改变不清空规则计数。
