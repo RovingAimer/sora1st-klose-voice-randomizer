@@ -69,8 +69,6 @@ struct Resource {
     uint32_t id;
     std::string alias;
     std::wstring path;
-    std::array<std::string, 2> stereoAlias;
-    std::array<std::wstring, 2> stereoPath;
 };
 struct HistoryEntry {
     uint64_t key;

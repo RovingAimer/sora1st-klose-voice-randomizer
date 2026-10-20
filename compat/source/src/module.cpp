@@ -36,6 +36,27 @@ Cache originalCache = nullptr;
 Frame originalFrame = nullptr;
 CacheKey originalCacheKey = nullptr;
 Sampler originalSampler = nullptr;
+using ProcessTask = uint32_t (__fastcall*)(void*, const void*);
+using InsertWave = uint32_t (__fastcall*)(void*, const char*, const void*, uint64_t, void*);
+using NativeMutex = int (__fastcall*)(void*);
+ProcessTask originalProcessTask = nullptr;
+InsertWave insertWave = nullptr;
+NativeMutex lockAudioCache = nullptr, unlockAudioCache = nullptr;
+struct StereoContext {
+    bool right = false, created = false;
+    float gain = 1.f;
+    bool attempted = false;
+    void* sampler = nullptr;
+    uint32_t slot = UINT32_MAX;
+    IXAudio2SourceVoice* source = nullptr;
+    IXAudio2SubmixVoice* destination = nullptr;
+};
+thread_local StereoContext* currentStereo = nullptr;
+struct StereoScope {
+    StereoContext* previous;
+    explicit StereoScope(StereoContext& context) : previous(currentStereo) { currentStereo=&context; }
+    ~StereoScope() { currentStereo=previous; }
+};
 struct State {
     explicit State(uint64_t seed) : rules(seed) {}
     std::wstring root, ini;
@@ -218,7 +239,7 @@ bool Prepare(const Request* input, Prepared& play) {
         play.stereoRequested = state->config.stereo;
         play.swap = state->config.stereoSwap;
         if (play.stereoRequested) {
-            play.stereo = FileExists(play.resource->stereoPath[play.swap ? 1 : 0]);
+            play.stereo = true;
             play.decision.reason = 7;
         } else play.decision = state->rules.Choose(play.name, state->config);
         play.eligible = true;
@@ -234,18 +255,14 @@ uint32_t __fastcall PlayHook(void* self, const Request* input) {
     uint32_t handle;
     if (!play.eligible) handle = originalPlay(self, input);
     else {
-        if (play.stereo) {
-            play.request.name = play.resource->stereoAlias[play.swap ? 1 : 0].c_str();
-        } else if (play.stereoRequested) {
-            Log("STEREO_FALLBACK name=%s stereo_asset_missing; using game voice", play.name.c_str());
-        } else if (play.decision.selectedOld) {
+        if (!play.stereo && play.decision.selectedOld) {
             if (FileExists(play.resource->path)) {
                 play.request.name = play.resource->alias.c_str();
                 actualOld = true;
             } else Log("FALLBACK event=%llu name=%s old_file_missing", play.decision.event, play.name.c_str());
         }
         handle = originalPlay(self, &play.request);
-        if ((actualOld || play.stereo) && handle == UINT32_MAX) {
+        if (actualOld && handle == UINT32_MAX) {
             Log("FALLBACK event=%llu name=%s old_queue_rejected", play.decision.event, play.name.c_str());
             handle = originalPlay(self, input);
             actualOld = false;
@@ -301,17 +318,11 @@ bool ModuleCacheKey(const char* input, char (&key)[64]) {
     }
     constexpr std::string_view oldPrefix = "voice_randomizer/assets/old/";
     constexpr std::string_view testPrefix = "voice_randomizer/assets/placeholder/";
-    constexpr std::string_view stereoLeftPrefix = "voice_randomizer/assets/stereo_lr/";
-    constexpr std::string_view stereoRightPrefix = "voice_randomizer/assets/stereo_rl/";
     std::string_view keyPrefix;
     if (name.substr(0,oldPrefix.size()) == oldPrefix) {
         name.remove_prefix(oldPrefix.size()); keyPrefix = "vr_old_";
     } else if (name.substr(0,testPrefix.size()) == testPrefix) {
         name.remove_prefix(testPrefix.size()); keyPrefix = "vr_test_";
-    } else if (name.substr(0,stereoLeftPrefix.size()) == stereoLeftPrefix) {
-        name.remove_prefix(stereoLeftPrefix.size()); keyPrefix = "vr_stlr_";
-    } else if (name.substr(0,stereoRightPrefix.size()) == stereoRightPrefix) {
-        name.remove_prefix(stereoRightPrefix.size()); keyPrefix = "vr_strl_";
     } else return false;
     // Exact startup-valid table membership rejects other namespaces, nested
     // paths, extension variants and the three UI-only rows.
@@ -333,59 +344,184 @@ void __fastcall CacheKeyHook(char* output, const char* input) {
     // All reviewed callers consume output, never RAX (559B20 is void).
     originalCacheKey(output,matched ? key : input);
 }
-bool StereoResourceName(const char* input) {
-    char buffer[MAX_PATH]{};
-    if (!SafeName(buffer, input)) return false;
-    for (char& character : buffer) {
-        if (character == '\\') character = '/';
-        else if (character >= 'A' && character <= 'Z') character += 'a'-'A';
+struct CacheLock {
+    void* mutex;
+    bool held;
+    explicit CacheLock(void* manager) : mutex(static_cast<uint8_t*>(manager)+0xC28),
+        held(lockAudioCache(mutex)==0) {}
+    ~CacheLock() { if (held) unlockAudioCache(mutex); }
+};
+bool PrecacheOldWave(void* manager,const Resource& resource) {
+    // Use the engine's own cache and its native mutex on the audio task thread.
+    // Its insert routine copies the PCM payload into engine-owned storage.
+    if (!FileExists(resource.path)) return false;
+    auto* cache=static_cast<uint8_t*>(manager)+0x2A0;
+    const std::string path="voice/wav/"+resource.alias+".wav";
+    {
+        CacheLock lock(manager);
+        if (!lock.held) return false;
+        if (originalCache(cache,path.c_str())!=-1) return true;
     }
-    std::string_view name(buffer);
-    constexpr std::string_view fullPrefix = "voice/wav/";
-    if (name.substr(0,fullPrefix.size()) == fullPrefix) name.remove_prefix(fullPrefix.size());
-    if (name.size()>4 && name.substr(name.size()-4)==".wav") name.remove_suffix(4);
-    constexpr std::string_view prefixes[] = {"voice_randomizer/assets/stereo_lr/",
-        "voice_randomizer/assets/stereo_rl/", "vr_stlr_", "vr_strl_"};
-    for (const auto prefix : prefixes) {
-        if (name.substr(0,prefix.size()) == prefix)
-            return state->resources.find(std::string(name.substr(prefix.size()))) != state->resources.end();
+    const HANDLE file=CreateFileW(resource.path.c_str(),GENERIC_READ,FILE_SHARE_READ,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if (file==INVALID_HANDLE_VALUE) return false;
+    struct Close { HANDLE file; ~Close() { CloseHandle(file); } } close{file};
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file,&size) || size.QuadPart<44 || size.QuadPart>16777216) return false;
+    std::vector<uint8_t> wav(static_cast<size_t>(size.QuadPart));
+    DWORD count=0;
+    if (!ReadFile(file,wav.data(),static_cast<DWORD>(wav.size()),&count,nullptr) || count!=wav.size()) return false;
+    void* sampler=nullptr;
+    if (!SafeCopy(&sampler,static_cast<uint8_t*>(manager)+0x400,sizeof(sampler)) || !sampler) return false;
+    CacheLock lock(manager);
+    if (!lock.held) return false;
+    return insertWave(cache,path.c_str(),wav.data(),static_cast<uint64_t>(wav.size()),sampler)!=UINT32_MAX;
+}
+bool __fastcall SamplerHook(void* self,uint32_t slot,const char* name,uint32_t a4,
+    uint32_t a5,uint32_t a6,const void* a7,uint32_t flags,
+    const WAVEFORMATEX* format,const XAUDIO2_BUFFER* buffer) {
+    StereoContext* context=currentStereo;
+    WORD channels=0;
+    const bool split=context && format
+        && SafeCopy(&channels,reinterpret_cast<const uint8_t*>(format)+2,sizeof(channels)) && channels==1;
+    if (split) context->attempted=true;
+    // A private two-channel submix isolates our inner mono->stereo pan from the
+    // engine's subsequent per-frame outer routing and volume updates.
+    const bool success=originalSampler(self,slot,name,a4,a5,a6,a7,
+        split ? ((flags&0x00ffffffu)|0x01000000u) : flags,format,buffer);
+    if (!success || !split) return success;
+    IXAudio2SourceVoice** sources=nullptr;
+    IXAudio2SubmixVoice** sends=nullptr;
+    IXAudio2SourceVoice* source=nullptr;
+    IXAudio2SubmixVoice* destination=nullptr;
+    uint32_t sourceCount=0,sendCount=0;
+    const auto bytes=static_cast<const uint8_t*>(self);
+    if (SafeCopy(&sources,bytes+0xE8,sizeof(sources)) && sources
+        && SafeCopy(&sends,bytes+0xF8,sizeof(sends)) && sends
+        && SafeCopy(&sourceCount,bytes+0xF0,sizeof(sourceCount)) && slot<sourceCount
+        && SafeCopy(&sendCount,bytes+0x100,sizeof(sendCount)) && slot<sendCount
+        && SafeCopy(&source,sources+slot,sizeof(source)) && source
+        && SafeCopy(&destination,sends+slot,sizeof(destination)) && destination) {
+        const float pan[2]={context->right?0.f:1.f,context->right?1.f:0.f};
+        const HRESULT routed=source->SetOutputMatrix(destination,1,2,pan,XAUDIO2_COMMIT_NOW);
+        const HRESULT gained=source->SetChannelVolumes(1,&context->gain,XAUDIO2_COMMIT_NOW);
+        context->created=SUCCEEDED(routed) && SUCCEEDED(gained);
+        Log("NATIVE_STEREO_ROUTE handle=%u slot=%u side=%s gain=%g matrix=%08lx volume=%08lx",
+            a4,slot,context->right?"right":"left",static_cast<double>(context->gain),
+            static_cast<unsigned long>(routed),static_cast<unsigned long>(gained));
+        if (context->created) {
+            context->sampler=self;
+            context->slot=slot;
+            context->source=source;
+            context->destination=destination;
+            return true;
+        }
     }
+    // Do not leave an allocated, unstarted voice behind after a failed route.
+    using ClearSlot=void (__fastcall*)(void*,uint32_t);
+    const auto vtable=*reinterpret_cast<void***>(self);
+    reinterpret_cast<ClearSlot>(vtable[0x120/sizeof(void*)])(self,slot);
     return false;
 }
-bool __fastcall SamplerHook(void* self, uint32_t slot, const char* name, uint32_t a4,
-    uint32_t a5, uint32_t a6, const void* a7, uint32_t flags,
-    const WAVEFORMATEX* format, const XAUDIO2_BUFFER* buffer) {
-    bool stereo = false;
-    float volumes[2]{1.f,1.f};
+bool Started(const StereoContext& context) {
+    if (!context.created || !context.sampler) return false;
+    const auto bytes=static_cast<const uint8_t*>(context.sampler);
+    const uint8_t* metadata=nullptr;
+    uint32_t count=0;
+    uint8_t started=0;
+    IXAudio2SourceVoice** sources=nullptr;
+    IXAudio2SourceVoice* source=nullptr;
+    return SafeCopy(&sources,bytes+0xE8,sizeof(sources)) && sources
+        && SafeCopy(&count,bytes+0xF0,sizeof(count)) && context.slot<count
+        && SafeCopy(&source,sources+context.slot,sizeof(source)) && source==context.source
+        && SafeCopy(&metadata,bytes+0xA8,sizeof(metadata)) && metadata
+        && SafeCopy(&count,bytes+0xB0,sizeof(count)) && context.slot<count
+        && SafeCopy(&started,metadata+context.slot*0x180+1,sizeof(started)) && started!=0;
+}
+void RestorePrimary(const StereoContext& context) {
+    if (!Started(context)) return;
+    IXAudio2SourceVoice** sources=nullptr;
+    IXAudio2SourceVoice* source=nullptr;
+    if (!SafeCopy(&sources,static_cast<const uint8_t*>(context.sampler)+0xE8,sizeof(sources)) || !sources
+        || !SafeCopy(&source,sources+context.slot,sizeof(source)) || source!=context.source) return;
+    const float pan[2]={1.f,1.f}, gain=1.f;
+    source->SetOutputMatrix(context.destination,1,2,pan,XAUDIO2_COMMIT_NOW);
+    source->SetChannelVolumes(1,&gain,XAUDIO2_COMMIT_NOW);
+}
+uint32_t __fastcall ProcessTaskHook(void* manager,const void* task) {
+    bool primaryCalled=false;
+    uint32_t primaryResult=1;
+    StereoContext primary,secondary;
     try {
-        WORD channels=0;
-        stereo = format && SafeCopy(&channels,reinterpret_cast<const uint8_t*>(format)+2,sizeof(channels))
-            && channels==2 && StereoResourceName(name);
-        if (stereo) {
-            std::lock_guard<std::mutex> lock(state->configMutex);
-            volumes[0]=static_cast<float>(state->config.stereoLeft)/100.f;
-            volumes[1]=static_cast<float>(state->config.stereoRight)/100.f;
+        const Request* input=nullptr;
+        Request request{};
+        char name[MAX_PATH]{};
+        if (!SafeCopy(&input,static_cast<const uint8_t*>(task)+0x10,sizeof(input)) || !input
+            || !SafeCopy(&request,input,sizeof(request)) || request.kind!=2 || !SafeName(name,request.name))
+            return originalProcessTask(manager,task);
+        const auto resource=state->resources.find(name);
+        Config config;
+        { std::lock_guard<std::mutex> lock(state->configMutex); config=state->config; }
+        if (!config.enabled || !config.stereo || resource==state->resources.end())
+            return originalProcessTask(manager,task);
+        if (!PrecacheOldWave(manager,resource->second)) {
+            Log("NATIVE_STEREO_FALLBACK name=%s old_cache_unavailable",name);
+            return originalProcessTask(manager,task);
         }
-    } catch (...) { stereo=false; }
-    // The high byte selects the engine's mono/panned submix. For our explicit
-    // two-channel resources use its direct stereo route; retain all other flags.
-    const bool success=originalSampler(self,slot,name,a4,a5,a6,a7,
-        stereo ? flags & 0x00ffffffu : flags,format,buffer);
-    if (success && stereo) {
-        IXAudio2SourceVoice** voices=nullptr;
-        uint32_t count=0;
-        IXAudio2SourceVoice* source=nullptr;
-        const auto bytes=static_cast<const uint8_t*>(self);
-        if (SafeCopy(&voices,bytes+0xE8,sizeof(voices)) && voices
-            && SafeCopy(&count,bytes+0xF0,sizeof(count)) && slot<count
-            && SafeCopy(&source,voices+slot,sizeof(source)) && source) {
-            const HRESULT result=source->SetChannelVolumes(2,volumes,XAUDIO2_COMMIT_NOW);
-            Log("STEREO_ROUTE slot=%u left=%g right=%g flags=%08x hresult=%08lx",
-                slot,static_cast<double>(volumes[0]),static_cast<double>(volumes[1]),flags,
-                static_cast<unsigned long>(result));
-        } else Log("STEREO_ROUTE slot=%u native_source_unavailable",slot);
+        // This handler only reads task+0, +10, +68 and +70. Reuse the public
+        // handle in a private header, preserving all its timing metadata.
+        alignas(16) std::array<uint8_t,0x78> secondaryTask{};
+        if (!SafeCopy(secondaryTask.data(),task,secondaryTask.size()))
+            return originalProcessTask(manager,task);
+        Request oldRequest=request;
+        oldRequest.name=resource->second.alias.c_str();
+        const uint32_t anonymous=UINT32_MAX;
+        // A secondary source must not compete with the primary's explicit
+        // identity. Its distinct vr_old_/vr_test_ cache key remains intact.
+        memcpy(reinterpret_cast<uint8_t*>(&oldRequest)+0x38,&anonymous,sizeof(anonymous));
+        const Request* oldPointer=&oldRequest;
+        memcpy(secondaryTask.data()+0x10,&oldPointer,sizeof(oldPointer));
+        primary={config.stereoSwap,false,
+            static_cast<float>(config.stereoSwap?config.stereoRight:config.stereoLeft)/100.f};
+        {
+            StereoScope scope(primary);
+            primaryCalled=true;
+            primaryResult=originalProcessTask(manager,task);
+        }
+        if (!Started(primary)) {
+            Log("NATIVE_STEREO_FALLBACK name=%s primary_not_started result=%u",name,primaryResult);
+            // A cold-cache pending result has not touched the sampler. Only a
+            // failed native creation/routing/start is retried in ordinary mono.
+            if (primary.attempted) primaryResult=originalProcessTask(manager,task);
+            return primaryResult;
+        }
+        secondary={!config.stereoSwap,false,
+            static_cast<float>(config.stereoSwap?config.stereoLeft:config.stereoRight)/100.f};
+        uint32_t secondaryResult=1;
+        {
+            StereoScope scope(secondary);
+            secondaryResult=originalProcessTask(manager,secondaryTask.data());
+        }
+        const bool both=primary.slot!=secondary.slot && Started(primary) && Started(secondary);
+        if (!both) {
+            if (Started(secondary)) {
+                using ClearSlot=void (__fastcall*)(void*,uint32_t);
+                const auto vtable=*reinterpret_cast<void***>(secondary.sampler);
+                reinterpret_cast<ClearSlot>(vtable[0x120/sizeof(void*)])(secondary.sampler,secondary.slot);
+            }
+            if (Started(primary)) RestorePrimary(primary);
+            else primaryResult=originalProcessTask(manager,task);
+        }
+        uint32_t handle=0;
+        memcpy(&handle,secondaryTask.data(),sizeof(handle));
+        Log("NATIVE_STEREO_PAIR handle=%u name=%s both=%d secondary_result=%u swap=%d",
+            handle,name,both,secondaryResult,config.stereoSwap);
+        return primaryResult;
+    } catch (...) {
+        RestorePrimary(primary);
+        Log("NATIVE_STEREO_FALLBACK native preparation failed");
+        return primaryCalled?primaryResult:originalProcessTask(manager,task);
     }
-    return success;
 }
 uint32_t __fastcall FrameHook(void* self, uint8_t flag) {
     IDXGISwapChain* chain = nullptr;
@@ -432,6 +568,7 @@ DWORD AttachHooks() {
     if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalFrame), FrameHook);
     if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalCacheKey), CacheKeyHook);
     if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalSampler), SamplerHook);
+    if (!error) error = DetourAttach(reinterpret_cast<PVOID*>(&originalProcessTask), ProcessTaskHook);
     if (error) DetourTransactionAbort();
     else error = DetourTransactionCommit();
     return static_cast<DWORD>(error);
@@ -448,7 +585,14 @@ DWORD Initialize() {
     static constexpr uint8_t cacheBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x57,0x48,0x81,0xec,0x80,0x00,0x00,0x00};
     static constexpr uint8_t frameBytes[] = {0x40,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x48,0x8b,0x89,0xd8,0x02,0x00,0x00};
     static constexpr uint8_t keyBytes[] = {0x48,0x85,0xc9,0x0f,0x84,0x1a,0x01,0x00,0x00,0x48,0x89,0x5c,0x24,0x18,0x55};
-    static constexpr uint8_t samplerBytes[] = {0x55,0x53,0x56,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x8D,0x6C,0x24,0xF9};
+    static constexpr uint8_t samplerBytes[] = {0x40,0x55,0x53,0x56,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x8D,0x6C,0x24,0xF9};
+    static constexpr uint8_t taskBytes[]={0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57};
+    static constexpr uint8_t insertBytes[]={0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xEC,0x58};
+    static constexpr uint8_t lockBytes[]={0x33,0xD2,0xE9,0x49,0,0,0};
+    static constexpr uint8_t unlockBytes[]={0x48,0x83,0xEC,0x28,0x83,0x69,0x4C,0x01,0x75,0x11};
+    if (memcmp(base+0x55BAF0,taskBytes,sizeof(taskBytes)) || memcmp(base+0x57CB00,insertBytes,sizeof(insertBytes))
+        || memcmp(base+0x768C44,lockBytes,sizeof(lockBytes)) || memcmp(base+0x768C70,unlockBytes,sizeof(unlockBytes)))
+        return ERROR_REVISION_MISMATCH;
     if (memcmp(base + 0x4A1BF0, playBytes, sizeof(playBytes)) || memcmp(base + 0x57D1C0, cacheBytes, sizeof(cacheBytes))
         || memcmp(base + 0x51D570, frameBytes, sizeof(frameBytes))
         || memcmp(base + 0x559B20, keyBytes, sizeof(keyBytes))
@@ -473,11 +617,7 @@ DWORD Initialize() {
         const std::string name(item.name);
         const std::wstring path = folder + std::wstring(name.begin(), name.end()) + L".wav";
         if (AnsiPath(path) && ValidWave(path)) {
-            const std::wstring wideName(name.begin(),name.end());
-            Resource resource{item.id,relative+name,path,
-                {"voice_randomizer/assets/stereo_lr/"+name,"voice_randomizer/assets/stereo_rl/"+name},
-                {state->root+L"\\assets\\stereo_lr\\"+wideName+L".wav",
-                 state->root+L"\\assets\\stereo_rl\\"+wideName+L".wav"}};
+            Resource resource{item.id,relative+name,path};
             state->resources.emplace(name,std::move(resource));
         }
         else Log("RESOURCE excluded id=%u name=%s", item.id, item.name);
@@ -488,6 +628,10 @@ DWORD Initialize() {
     originalFrame = reinterpret_cast<Frame>(base + 0x51D570);
     originalCacheKey = reinterpret_cast<CacheKey>(base + 0x559B20);
     originalSampler = reinterpret_cast<Sampler>(base + 0x586AE0);
+    originalProcessTask=reinterpret_cast<ProcessTask>(base+0x55BAF0);
+    insertWave=reinterpret_cast<InsertWave>(base+0x57CB00);
+    lockAudioCache=reinterpret_cast<NativeMutex>(base+0x768C44);
+    unlockAudioCache=reinterpret_cast<NativeMutex>(base+0x768C70);
     HMODULE pinned = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                            reinterpret_cast<LPCWSTR>(&Initialize), &pinned)) return GetLastError();
@@ -496,7 +640,7 @@ DWORD Initialize() {
     const HANDLE worker = CreateThread(nullptr, 0, ConfigurationWorker, nullptr, 0, nullptr);
     if (worker) CloseHandle(worker);
     else Log("CONFIG worker failed error=%lu; initial configuration retained", GetLastError());
-    Log("INIT ready resources=%zu ui=827 set=%s alias_namespace=voice_randomizer/assets hooks=5 cache_key=559B20 stereo_sampler=586AE0 no_open_hook=1 runtime_validation=pending",
+    Log("INIT ready resources=%zu ui=827 set=%s alias_namespace=voice_randomizer/assets hooks=6 cache_key=559B20 stereo_sampler=586AE0 stereo_task=55BAF0 no_open_hook=1 runtime_validation=pending",
         state->resources.size(), placeholder ? "placeholder" : "legacy");
     return ERROR_SUCCESS;
 }

@@ -124,12 +124,12 @@ struct App {
         check(Swap,L"左右互换",L"Swap channels",0,390,397,280);
         label(L"左声道音量 (%)",L"Left volume (%)",0,40,439,186,25);number(LeftVolume,0,230,431);
         label(L"右声道音量 (%)",L"Right volume (%)",0,350,439,194,25);number(RightVolume,0,554,431,116);
-        label(L"目标/硬保底/明光变化清全部计数，软参数只清软计数。\r\n双声道需安装素材包；音量 0 静音、100 原音量。",L"Target/Guarantee/Radiance reset all; soft settings reset only soft pity.\r\nStereo needs its asset pack. Volume 0 mutes; 100 is unchanged.",0,40,478,630,43);
+        label(L"目标/硬保底/明光变化清全部计数，软参数只清软计数。\r\n原生双声道无需额外素材；音量 0 静音、100 原音量。",L"Target/Guarantee/Radiance reset all; soft settings reset only soft pity.\r\nNative stereo needs no extra assets. Volume 0 mutes; 100 is unchanged.",0,40,478,630,43);
         check(OverlayEnabled,L"显示游戏内播放记录",L"Show in-game voice history",1,40,128,630);
         check(HideOther,L"下一条非克萝赛语音时隐藏，克萝赛语音时恢复",L"Hide on other voices; show again when Klose speaks",1,40,162,630);
         label(L"左边距 (%)",L"Left margin (%)",1,40,210,170,25);number(Left,1,220,202);
         label(L"垂直中心 (%)",L"Vertical center (%)",1,370,210,178,25);number(Center,1,554,202,116);
-        label(L"区域高度 (%)",L"Region height (%)",1,40,252,170,25);number(Height,1,220,244);
+        label(L"UI 区域高度 (%)",L"UI region height (%)",1,40,252,170,25);number(Height,1,220,244);
         label(L"动画时长 (毫秒)",L"Animation (ms)",1,370,252,178,25);number(Scroll,1,554,244,116);
         label(L"显示条数",L"Visible entries",1,40,294,170,25);number(MaxEntries,1,220,286);
         label(L"常态透明度 (%)",L"Transparency (%)",1,370,294,178,25);number(Transparency,1,554,286,116);
