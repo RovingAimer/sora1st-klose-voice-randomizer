@@ -77,22 +77,16 @@ struct App {
         if(building)return;
         view=collect();dirty=view!=document.values || !document.exists || document.normalised;
         EnableWindow(GetDlgItem(window,SaveId),dirty);
-        const bool stereo=view[Stereo]==L"1", random=view[Mode]==L"random" && !stereo;
-        EnableWindow(fields[Mode],!stereo);
-        EnableWindow(fields[DefaultVolume],!stereo);
-        EnableWindow(GetDlgItem(window,200+DefaultVolume),!stereo);
+        const bool random=view[Mode]==L"random";
         for(auto id:{OldPercent,Target,Guarantee,Radiance,SoftPity})EnableWindow(fields[id],random);
         EnableWindow(GetDlgItem(window,200+OldPercent),random);
         for(auto id:{SoftStart,SoftStep}) {
             EnableWindow(fields[id],random && view[SoftPity]==L"1");
             EnableWindow(GetDlgItem(window,200+id),random && view[SoftPity]==L"1");
         }
-        for(auto id:{Swap,LeftVolume,RightVolume})EnableWindow(fields[id],stereo);
-        for(auto id:{LeftVolume,RightVolume})EnableWindow(GetDlgItem(window,200+id),stereo);
-        if(stereo)SetWindowTextW(rule_text,tr(L"双声道优先：默认左新版、右旧版；左右互换后反转。\r\n随机、交替与所有保底计数暂停。",L"Stereo takes priority: left new, right legacy; Swap reverses them.\r\nRandom, alternation and all pity counters pause."));
-        else if(!random)SetWindowTextW(rule_text,tr(L"当前模式暂停所有保底计数；交替从新版开始。\r\n缺少旧资源的语音使用游戏配音。",L"This mode pauses all pity counters. Alternation starts with new.\r\nLines without legacy resources use game audio."));
+        if(!random)SetWindowTextW(rule_text,tr(L"当前模式暂停所有保底计数；交替从新版开始。\r\n缺少旧资源的语音使用游戏配音。",L"This mode pauses all pity counters. Alternation starts with new.\r\nLines without legacy resources use game audio."));
         else SetWindowTextW(rule_text,tr(L"软保底：连续未中目标 X 次后，下次提升所设百分点；再未中继续加。\r\n命中目标（包括硬保底）清零；目标结果最高为 100%。",L"Soft pity: after X consecutive misses, add the set points per further draw.\r\nAny target hit (including Guarantee) resets it. Target chance caps at 100%."));
-        if(document.normalised && view==document.values)set_status(L"部分原有值无效，界面已采用有效值；点击保存可更新配置。",L"Some existing values were invalid. Valid values are shown; click Save to apply them.");
+        if(document.normalised && view==document.values)set_status(L"部分原有设置需要更新；点击保存可保留有效值并清理旧选项。",L"Some old settings need updating. Save to keep valid values and remove retired options.");
         else if(dirty)set_status(L"有尚未保存的更改。",L"You have unsaved changes.");
         else set_status(L"配置已读取。保存后，多数设置约 1 秒在游戏中生效。",L"Settings loaded. Most changes take effect in-game about one second after saving.");
         if(preview)InvalidateRect(preview,nullptr,TRUE);
@@ -123,11 +117,8 @@ struct App {
         label(L"连续未中次数 X",L"Consecutive misses X",0,40,312,186,25);number(SoftStart,0,230,304);
         label(L"每次提升百分点",L"Added points per draw",0,350,312,194,25);number(SoftStep,0,554,304,116);
         rule_text=label(L"",L"",0,40,344,630,49);
-        check(Stereo,L"启用双声道（左新、右旧）",L"Stereo (left new, right legacy)",0,40,397,330);
-        check(Swap,L"左右互换",L"Swap channels",0,390,397,280);
-        label(L"左声道音量 (%)",L"Left volume (%)",0,40,439,186,25);number(LeftVolume,0,230,431);
-        label(L"右声道音量 (%)",L"Right volume (%)",0,350,439,194,25);number(RightVolume,0,554,431,116);
-        label(L"目标/硬保底/明光变化清全部计数，软参数只清软计数。\r\n原生双声道无需额外素材；音量 0 静音、100 原音量。",L"Target/Guarantee/Radiance reset all; soft settings reset only soft pity.\r\nNative stereo needs no extra assets. Volume 0 mutes; 100 is unchanged.",0,40,478,630,43);
+        label(L"默认音量适用于新版、旧版及随机/交替模式。\r\n音量 0 静音、100 原音量；保存后对后续语音生效。",L"Default volume applies to new, legacy, random and alternate modes.\r\nVolume 0 mutes; 100 is unchanged. Saved changes apply to later voices.",0,40,404,630,49);
+        label(L"目标/硬保底/明光变化清全部计数，软参数只清软计数。",L"Target/Guarantee/Radiance reset all; soft settings reset only soft pity.",0,40,478,630,43);
         check(OverlayEnabled,L"显示游戏内播放记录",L"Show in-game voice history",1,40,128,630);
         check(HideOther,L"下一条非克萝赛语音时隐藏，克萝赛语音时恢复",L"Hide on other voices; show again when Klose speaks",1,40,162,630);
         label(L"左边距 (%)",L"Left margin (%)",1,40,210,170,25);number(Left,1,220,202);

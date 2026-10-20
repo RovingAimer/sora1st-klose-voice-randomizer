@@ -2,7 +2,7 @@
 
 ## 通用加载器兼容分支
 
-本 fork 的独立模块入口在 [`compat/`](compat/README.md)，承接已有反编译移植版，通过 sora1looseload v0.2.0 加载；保留原随机规则、设置程序和播放记录显示。原作者工程保留在 `voice_randomizer/`，用于源码对照和设置程序维护。本地候选不替换根目录加载器，未公开发布运行包；音频与私人分析材料不提交仓库。
+本 fork 的独立模块入口在 [`compat/`](compat/README.md)，通过 sora1looseload v0.2.0 加载，保留原随机规则、设置程序和播放记录，并增加软保底、默认音量和显示选项。[下载 v0.1.0](https://github.com/RovingAimer/sora1st-klose-voice-randomizer/releases/tag/v0.1.0)。安装包不替换根目录加载器，旧语音素材沿用原 Mod、自行准备；音频与私人分析材料不上传。原作者工程保留在 `voice_randomizer/`，用于源码对照和设置程序维护。
 
 以下为原作者工程说明，其 XInput 代理构建与安装方式不适用于 `compat` 独立模块候选。
 

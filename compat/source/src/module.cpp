@@ -128,10 +128,9 @@ void RefreshConfiguration() {
     config.softPity = Integer(L"Randomizer", L"SoftPityEnabled", 0, 0, 1) != 0;
     config.softPityStart = Integer(L"Randomizer", L"SoftPityStart", 10, 1, 1000);
     config.softPityStep = Integer(L"Randomizer", L"SoftPityStep", 5, 0, 100);
-    config.stereo = Integer(L"Stereo", L"Enabled", 0, 0, 1) != 0;
-    config.stereoSwap = Integer(L"Stereo", L"SwapChannels", 0, 0, 1) != 0;
-    config.stereoLeft = Integer(L"Stereo", L"LeftVolume", 100, 0, 100);
-    config.stereoRight = Integer(L"Stereo", L"RightVolume", 100, 0, 100);
+    // Experimental stereo is excluded from this release, including old INIs.
+    // Keep its implementation dormant; no stereo configuration is consumed.
+    config.stereo = false;
     config.overlay.enabled = Integer(L"Overlay", L"Enabled", 1, 0, 1) != 0;
     config.overlay.left = static_cast<float>(Integer(L"Overlay", L"LeftPercent", 2, 0, 90)) / 100.f;
     config.overlay.center = static_cast<float>(Integer(L"Overlay", L"CenterYPercent", 40, 0, 100)) / 100.f;

@@ -304,7 +304,12 @@ def main():
                         help="previous compatible install ZIP supplying unchanged assets without extraction")
     parser.add_argument("--out", type=Path, default=ROOT / "dist",
                         help="output directory inside this workspace (default: dist/)")
+    parser.add_argument("--release-version", help="prepare versioned release filenames, for example 0.1.0")
+    parser.add_argument("--no-audio", action="store_true", help="exclude legacy WAVs from the installation archive")
     args = parser.parse_args()
+    if args.release_version and not re.fullmatch(r"\d+\.\d+\.\d+", args.release_version):
+        raise RuntimeError("--release-version must be MAJOR.MINOR.PATCH")
+    stem = "VoiceRandomizer-v" + args.release_version if args.release_version else ARCHIVE_STEM
 
     original = args.original.expanduser().resolve(strict=True)
     if not original.is_dir():
@@ -349,14 +354,15 @@ def main():
     dll_record = file_record(dll_path)
     ini_path = ROOT / "source" / "sora_mod.ini"
     module_ini_record = file_record(ini_path)
-    install_name = ARCHIVE_STEM + "-install.zip"
-    source_name = ARCHIVE_STEM + "-source.zip"
-    manifest_name = ARCHIVE_STEM + "-manifest.json"
+    install_name = stem + ("-main.zip" if args.release_version else "-install.zip")
+    source_name = stem + "-source.zip"
+    manifest_name = stem + "-manifest.json"
     install_path = output / install_name
     source_path = output / source_name
 
     asset_records = {
         key: value for key, value in original_records.items() if key.startswith("voice_randomizer/")
+        and not (args.no_audio and key.lower().endswith(".wav"))
     }
     expected_install = {
         "mods/VoiceRandomizer/VoiceRandomizer.dll": dll_record,
@@ -384,7 +390,7 @@ def main():
     finally:
         install_tmp.unlink(missing_ok=True)
 
-    update_path = output / (ARCHIVE_STEM + "-module-update.zip")
+    update_path = output / (stem + ("-update.zip" if args.release_version else "-module-update.zip"))
     update_files = install_files[:2] + [(editor_path, "voice/wav/voice_randomizer/克萝赛MOD设置.exe")]
     zip_from_files(update_path, update_files)
     update_members = verify_zip(update_path, {member: expected_install[member] for _, member in update_files})
@@ -403,8 +409,8 @@ def main():
         source_tmp.unlink(missing_ok=True)
 
     docs = [
-        (ROOT / "README.md", output / (ARCHIVE_STEM + "-README.md")),
-        (ROOT / "验收与回退.md", output / (ARCHIVE_STEM + "-验收与回退.md")),
+        (ROOT / "README.md", output / (stem + "-README.md")),
+        (ROOT / "验收与回退.md", output / (stem + "-验收与回退.md")),
     ]
     doc_records = []
     for source_doc, destination in docs:
@@ -412,7 +418,8 @@ def main():
         doc_records.append({"path": destination.name, **file_record(destination)})
 
     manifest = {
-        "artifact": "local candidate; not a release",
+        "artifact": "prepared release " + args.release_version if args.release_version else "local candidate; not a release",
+        "audio_included": not args.no_audio,
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "game_sha256_required": EXPECTED_GAME_SHA256,
         "package_source_commit": source_commit,

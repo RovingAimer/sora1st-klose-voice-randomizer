@@ -15,7 +15,7 @@
 namespace editor {
 enum Field { Enabled, Mode, OldPercent, Target, Guarantee, Radiance, AssetSet, LogCache,
              OverlayEnabled, Left, Center, Height, Scroll, SoftPity, SoftStart, SoftStep,
-             MaxEntries, Transparency, WaiScale, HideOther, Stereo, Swap, LeftVolume, RightVolume, DefaultVolume, FieldCount };
+             MaxEntries, Transparency, WaiScale, HideOther, DefaultVolume, FieldCount };
 struct Spec { const wchar_t* section; const wchar_t* key; const wchar_t* initial; int low; int high; const wchar_t* choices; };
 inline constexpr std::array<Spec,FieldCount> specs{{
     {L"Randomizer",L"Enabled",L"1",0,1,nullptr},
@@ -38,10 +38,6 @@ inline constexpr std::array<Spec,FieldCount> specs{{
     {L"Overlay",L"TransparencyPercent",L"0",0,100,nullptr},
     {L"Overlay",L"WaiScalePercent",L"100",0,200,nullptr},
     {L"Overlay",L"HideOnOtherVoice",L"0",0,1,nullptr},
-    {L"Stereo",L"Enabled",L"0",0,1,nullptr},
-    {L"Stereo",L"SwapChannels",L"0",0,1,nullptr},
-    {L"Stereo",L"LeftVolume",L"100",0,100,nullptr},
-    {L"Stereo",L"RightVolume",L"100",0,100,nullptr},
     {L"Randomizer",L"VolumePercent",L"100",0,100,nullptr},
 }};
 using Values=std::array<std::wstring,FieldCount>;
@@ -130,7 +126,7 @@ inline Document read(const std::filesystem::path& path,const std::wstring& fallb
     for(const auto& line:split(d.text,L'\n')) {
         const auto t=trim(line);
         if(t.empty() || t[0]==L';' || t[0]==L'#') continue;
-        if(t[0]==L'[' && t.back()==L']') { section=trim(t.substr(1,t.size()-2)); continue; }
+        if(t[0]==L'[' && t.back()==L']') { section=trim(t.substr(1,t.size()-2)); if(equal(section,L"Stereo"))d.normalised=true; continue; }
         const auto at=t.find(L'='); if(at==std::wstring::npos) continue;
         for(size_t i=0;i<specs.size();++i) if(!seen[i] && equal(section,specs[i].section) && equal(trim(t.substr(0,at)),specs[i].key)) {
             const auto raw=trim(t.substr(at+1)); d.values[i]=normalise(i,raw); seen[i]=true;
@@ -142,6 +138,13 @@ inline Document read(const std::filesystem::path& path,const std::wstring& fallb
 inline std::wstring updated_text(const Document& d,const Values& v) {
     auto lines=split(d.text,L'\n');
     for(auto& line:lines) if(!line.empty() && line.back()==L'\r') line.pop_back();
+    // Retire only the experimental section; preserve other settings/comments.
+    bool obsolete=false;
+    lines.erase(std::remove_if(lines.begin(),lines.end(),[&](const std::wstring& line) {
+        const auto t=trim(line);
+        if(t.size()>=2 && t.front()==L'[' && t.back()==L']')obsolete=equal(trim(t.substr(1,t.size()-2)),L"Stereo");
+        return obsolete;
+    }),lines.end());
     for(size_t i=0;i<specs.size();++i) {
         const auto& spec=specs[i];
         if(v[i]!=normalise(i,v[i])) throw Error(Failure::Invalid);

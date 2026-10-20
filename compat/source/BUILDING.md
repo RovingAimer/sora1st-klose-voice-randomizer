@@ -23,9 +23,9 @@ build/report.json 的 editor 项记录设置 EXE 路径、SHA256、大小、编�
 
 ~~~powershell
 $originalPackage = Read-Host "Path to the original package directory"
-python source/tools/package_candidate.py --original $originalPackage --out dist/20261020-default-volume
+python source/tools/package_candidate.py --original $originalPackage --release-version 0.1.0 --no-audio --out dist/v0.1.0
 ~~~
 
-若需要从此前兼容安装包读取未变更的旧资源，可传入 --assets-archive，并提供完整旧素材候选安装 ZIP。该选项只提供原有资源输入，不表示双声道素材包；824 个旧版 WAV 和 4 张 PNG 会按清单核对后复制到完整安装包。模块更新包只含 DLL、sora_mod.ini 和新版设置编辑器，不包含或覆盖用户 INI。完整安装包有 832 个文件，包含新默认 INI、编辑器、旧素材和模块文件。源码包包含完整 fork 源码和作者源码包中公开的 4 张 UI PNG，不包含 824 个旧版 WAV、程序二进制或游戏文件。
+若需要从此前兼容安装包读取未变更的旧资源，可传入 --assets-archive，并提供完整旧素材候选安装 ZIP。该选项只提供原有资源输入并按清单核对；--no-audio 仅打包程序、配置和四张 UI PNG，旧 WAV 不进入公开附件。模块更新包只含 DLL、sora_mod.ini 和新版设置编辑器，不包含或覆盖用户 INI。--no-audio 发布程序包有 8 个文件，含新默认 INI、编辑器、模块和四张 UI PNG；不附带旧 WAV。源码包包含完整 fork 源码和作者源码包中公开的 4 张 UI PNG，不包含 824 个旧版 WAV、程序二进制或游戏文件。
 
-打包前需要提交被打包的源码，脚本会检查模块构建报告、设置编辑器构建报告、源码输入哈希、原包清单和 ZIP 成员。ZIP 静态核验不能证明游戏运行结果。双声道使用两路原生单声道 SourceVoice，不需要旧实验 ZIP 或 generate_stereo.py；游戏中的声道、缓存及双路时序仍需手动验收。
+打包前需要提交被打包的源码，脚本会检查模块构建报告、设置编辑器构建报告、源码输入哈希、原包清单和 ZIP 成员。ZIP 静态核验不能证明游戏运行结果。v0.1.0 不读取双声道配置，实验实现停用；旧 Stereo 节在编辑器保存时移除。发布页使用 compat/RELEASE_NOTES.md 中的玩家说明。
