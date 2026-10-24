@@ -17,7 +17,7 @@ SDK 可采用标准 Include/10.x 与 Lib/10.x/{um,ucrt}/x64 布局，也可采�
 
 build/report.json 的 editor 项记录设置 EXE 路径、SHA256、大小、编译器/SDK/资源工具、源码输入哈希、生成资源哈希和系统依赖。构建静态检查 PE 架构、GUI 子系统、内嵌模板、版本资源和 manifest；这些检查不启动设置程序。
 
-工具只在 source/build/ 写入 VoiceRandomizer.dll、PE 导入/导出检查、命令记录、输入 SHA256 和诊断日志。构建只编译和检查 PE，不加载 DLL、不启动游戏，也不写入游戏目录。模块仅支持 sora_1st.exe SHA256 为 9585d3d993874d65156aba633c00b8a25faab3afde8953a8a183c80fb8f657ac 的版本。
+工具只在 source/build/ 写入 VoiceRandomizer.dll、PE 导入/导出检查、命令记录、输入 SHA256 和诊断日志。构建只编译和检查 PE，不加载 DLL、不启动游戏，也不写入游戏目录。不再按 EXE 文件名、文件大小或整文件 SHA256 设置白名单。采用与 Hinkiii 原版加载器相同的掩码特征扫描方式定位实际代码；找不到对应特征时跳过相应接入。其他版本是否可用取决于目标代码及对象布局，不要求整份 EXE 与某一版本完全相同。
 
 打包器位于 source/tools/package_candidate.py；从 compat/ 运行，并显式传入只读原包目录。它依赖 Python 标准库和 Git 命令行，不从本机配置猜测原包路径。输出必须位于项目工作区，可显式指定本轮候选目录：
 

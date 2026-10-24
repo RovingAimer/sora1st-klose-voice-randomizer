@@ -1,3 +1,4 @@
+#include "target_patterns.h"
 // Reconstructed third-party behavior; provenance and license boundary: VoiceRandomizer.h.
 #include "VoiceRandomizer.h"
 #include "detours.h"
@@ -190,36 +191,6 @@ bool AnsiPath(const std::wstring& path) {
     const int count = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, path.c_str(), -1,
                                          buffer, MAX_PATH, nullptr, &substituted);
     return count > 0 && count <= MAX_PATH && !substituted;
-}
-bool VerifyExecutable(const std::wstring& path) {
-    static constexpr uint8_t expected[32] = {0x95,0x85,0xd3,0xd9,0x93,0x87,0x4d,0x65,
-        0x15,0x6a,0xba,0x63,0x3c,0x00,0xb8,0xa2,0x5f,0xaa,0xb3,0xaf,0xde,0x89,0x53,0xa8,
-        0xa1,0x83,0xc8,0x0f,0xb8,0xf6,0x57,0xac};
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    HANDLE file = INVALID_HANDLE_VALUE;
-    uint8_t digest[32]{};
-    bool result = false;
-    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0
-        && BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0) {
-        file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (file != INVALID_HANDLE_VALUE) {
-            uint8_t buffer[65536];
-            DWORD count = 0;
-            bool ok = true;
-            for (;;) {
-                if (!ReadFile(file, buffer, sizeof(buffer), &count, nullptr)) { ok = false; break; }
-                if (!count) break;
-                if (BCryptHashData(hash, buffer, count, 0) < 0) { ok = false; break; }
-            }
-            result = ok && BCryptFinishHash(hash, digest, sizeof(digest), 0) >= 0
-                     && !memcmp(digest, expected, sizeof(expected));
-        }
-    }
-    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
-    if (hash) BCryptDestroyHash(hash);
-    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-    return result;
 }
 struct Prepared {
     Request request{};
@@ -610,25 +581,16 @@ DWORD Initialize() {
     const DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
     if (!length || length >= 32768) return ERROR_BAD_PATHNAME;
     const std::wstring exe(executable, length);
-    if (!VerifyExecutable(exe)) return ERROR_REVISION_MISMATCH;
-    const auto base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-    // Full-file hash and intact entry bytes are both required; no resource-open hook.
-    static constexpr uint8_t playBytes[] = {0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x6c,0x24,0x18,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x57};
-    static constexpr uint8_t cacheBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x57,0x48,0x81,0xec,0x80,0x00,0x00,0x00};
-    static constexpr uint8_t frameBytes[] = {0x40,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x48,0x8b,0x89,0xd8,0x02,0x00,0x00};
-    static constexpr uint8_t keyBytes[] = {0x48,0x85,0xc9,0x0f,0x84,0x1a,0x01,0x00,0x00,0x48,0x89,0x5c,0x24,0x18,0x55};
-    static constexpr uint8_t samplerBytes[] = {0x40,0x55,0x53,0x56,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x8D,0x6C,0x24,0xF9};
-    static constexpr uint8_t taskBytes[]={0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57};
-    static constexpr uint8_t insertBytes[]={0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xEC,0x58};
-    static constexpr uint8_t lockBytes[]={0x33,0xD2,0xE9,0x49,0,0,0};
-    static constexpr uint8_t unlockBytes[]={0x48,0x83,0xEC,0x28,0x83,0x69,0x4C,0x01,0x75,0x11};
-    if (memcmp(base+0x55BAF0,taskBytes,sizeof(taskBytes)) || memcmp(base+0x57CB00,insertBytes,sizeof(insertBytes))
-        || memcmp(base+0x768C44,lockBytes,sizeof(lockBytes)) || memcmp(base+0x768C70,unlockBytes,sizeof(unlockBytes)))
-        return ERROR_REVISION_MISMATCH;
-    if (memcmp(base + 0x4A1BF0, playBytes, sizeof(playBytes)) || memcmp(base + 0x57D1C0, cacheBytes, sizeof(cacheBytes))
-        || memcmp(base + 0x51D570, frameBytes, sizeof(frameBytes))
-        || memcmp(base + 0x559B20, keyBytes, sizeof(keyBytes))
-        || memcmp(base + 0x586AE0,samplerBytes,sizeof(samplerBytes))) return ERROR_REVISION_MISMATCH;
+    auto* addressPlay = targets::Play();
+    auto* addressCache = targets::Cache();
+    auto* addressFrame = targets::Frame();
+    auto* addressCacheKey = targets::CacheKey();
+    auto* addressSampler = targets::Sampler();
+    auto* addressProcessTask = targets::ProcessTask();
+    auto* addressInsertWave = targets::InsertWave();
+    auto* addressLockCache = targets::LockCache();
+    auto* addressUnlockCache = targets::UnlockCache();
+    if (!addressPlay || !addressCache || !addressFrame || !addressCacheKey || !addressSampler || !addressProcessTask || !addressInsertWave || !addressLockCache || !addressUnlockCache) return ERROR_PROC_NOT_FOUND;
     uint64_t seed = GetCurrentProcessId() ^ GetTickCount64();
     (void)BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&seed), sizeof(seed), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     std::unique_ptr<State> created(new State(seed));
@@ -655,15 +617,15 @@ DWORD Initialize() {
         else Log("RESOURCE excluded id=%u name=%s", item.id, item.name);
     }
     RefreshConfiguration();
-    originalPlay = reinterpret_cast<Play>(base + 0x4A1BF0);
-    originalCache = reinterpret_cast<Cache>(base + 0x57D1C0);
-    originalFrame = reinterpret_cast<Frame>(base + 0x51D570);
-    originalCacheKey = reinterpret_cast<CacheKey>(base + 0x559B20);
-    originalSampler = reinterpret_cast<Sampler>(base + 0x586AE0);
-    originalProcessTask=reinterpret_cast<ProcessTask>(base+0x55BAF0);
-    insertWave=reinterpret_cast<InsertWave>(base+0x57CB00);
-    lockAudioCache=reinterpret_cast<NativeMutex>(base+0x768C44);
-    unlockAudioCache=reinterpret_cast<NativeMutex>(base+0x768C70);
+    originalPlay = reinterpret_cast<Play>(addressPlay);
+    originalCache = reinterpret_cast<Cache>(addressCache);
+    originalFrame = reinterpret_cast<Frame>(addressFrame);
+    originalCacheKey = reinterpret_cast<CacheKey>(addressCacheKey);
+    originalSampler = reinterpret_cast<Sampler>(addressSampler);
+    originalProcessTask=reinterpret_cast<ProcessTask>(addressProcessTask);
+    insertWave=reinterpret_cast<InsertWave>(addressInsertWave);
+    lockAudioCache=reinterpret_cast<NativeMutex>(addressLockCache);
+    unlockAudioCache=reinterpret_cast<NativeMutex>(addressUnlockCache);
     HMODULE pinned = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                            reinterpret_cast<LPCWSTR>(&Initialize), &pinned)) return GetLastError();
@@ -672,7 +634,7 @@ DWORD Initialize() {
     const HANDLE worker = CreateThread(nullptr, 0, ConfigurationWorker, nullptr, 0, nullptr);
     if (worker) CloseHandle(worker);
     else Log("CONFIG worker failed error=%lu; initial configuration retained", GetLastError());
-    Log("INIT ready resources=%zu ui=827 set=%s alias_namespace=voice_randomizer/assets hooks=6 cache_key=559B20 stereo_sampler=586AE0 stereo_task=55BAF0 no_open_hook=1 runtime_validation=pending",
+    Log("INIT ready resources=%zu ui=827 set=%s alias_namespace=voice_randomizer/assets hooks=6 target_lookup=signature no_open_hook=1 runtime_validation=pending",
         state->resources.size(), placeholder ? "placeholder" : "legacy");
     return ERROR_SUCCESS;
 }

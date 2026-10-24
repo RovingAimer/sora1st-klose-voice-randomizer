@@ -1,5 +1,7 @@
 # 克萝赛随机语音 · 通用加载器版
 
+v0.1.1 移除额外 EXE hash 白名单，九个原生函数改为特征扫描定位。本次按用户授权仅静态验证后发布。
+
 适用于《空之轨迹 the 1st》，需要先安装 [sora1looseload 通用加载器 v0.2.0](https://github.com/RovingAimer/sora1looseload/releases/tag/v0.2.0)。
 
 ## 新增功能
@@ -14,10 +16,10 @@
 
 ## 下载与安装
 
-[下载 v0.1.0](https://github.com/RovingAimer/sora1st-klose-voice-randomizer/releases/tag/v0.1.0)。
+[下载 v0.1.1](https://github.com/RovingAimer/sora1st-klose-voice-randomizer/releases/tag/v0.1.1)。
 
-- `VoiceRandomizer-v0.1.0-main.zip`：首次安装程序包，含默认配置和界面图片。
-- `VoiceRandomizer-v0.1.0-source.zip`：完整源码，供查看和自行编译。
+- `VoiceRandomizer-v0.1.1-main.zip`：首次安装程序包，含默认配置和界面图片。
+- `VoiceRandomizer-v0.1.1-source.zip`：完整源码，供查看和自行编译。
 
 退出游戏并备份现有语音模块、设置程序和配置，再将程序包按原目录解压到游戏根目录。不替换根目录加载器，其他 Mod 保持原样。
 
@@ -49,4 +51,4 @@
 
 旧 `[Stereo]` 配置被模块忽略，编辑器保存时移除该节，不影响其他配置。双声道实验实现留在源码中停用，不在此版本修复。
 
-构建见 [source/BUILDING.md](source/BUILDING.md)，检查和回退见[验收与回退](验收与回退.md)，来源与许可见 [source/THIRD_PARTY.md](source/THIRD_PARTY.md)。当前只支持 1st 的指定游戏版本，不宣称 2nd 兼容。
+构建见 [source/BUILDING.md](source/BUILDING.md)，检查和回退见[验收与回退](验收与回退.md)，来源与许可见 [source/THIRD_PARTY.md](source/THIRD_PARTY.md)。不再按 EXE 文件名、文件大小或整文件 SHA256 设置白名单。采用与 Hinkiii 原版加载器相同的掩码特征扫描方式定位实际代码；找不到对应特征时跳过相应接入。其他版本是否可用取决于目标代码及对象布局，不要求整份 EXE 与某一版本完全相同。

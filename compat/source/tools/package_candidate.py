@@ -19,7 +19,6 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = ROOT.parent
-EXPECTED_GAME_SHA256 = "9585d3d993874d65156aba633c00b8a25faab3afde8953a8a183c80fb8f657ac"
 ARCHIVE_STEM = "VoiceRandomizer-options-candidate"
 CHUNK_SIZE = 1024 * 1024
 
@@ -421,7 +420,7 @@ def main():
         "artifact": "prepared release " + args.release_version if args.release_version else "local candidate; not a release",
         "audio_included": not args.no_audio,
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "game_sha256_required": EXPECTED_GAME_SHA256,
+        "game_sha256_required": "native masked signatures; no executable hash whitelist",
         "package_source_commit": source_commit,
         "settings_editor": editor,
         "native_module": {
